@@ -8,9 +8,11 @@
 // USB serial port, which the website reads directly via the Web Serial API
 // (see src/routes/+page.svelte) - a raw byte stream with no radio scheduling.
 //
-// Output format, one line per press:
+// Output format, one line per event:
 //   EVT,<mac>,<button>,<seq>\n
+//   ACC,<mac>,<x>,<y>,<z>,<seq>\n
 // e.g. EVT,28:84:85:EA:78:4C,B,97
+//      ACC,28:84:85:EA:78:4C,120,-38,16200,412
 //
 // Board: Boards Manager > esp32 (Espressif) >= 3.0.0
 //        Tools > Board > XIAO_ESP32C6 (or ESP32C6 Dev Module)
@@ -22,25 +24,44 @@
 #include <esp_wifi.h>
 
 // ---- Must match badge_espnow_firmware/main/main.c ----
-#define ESPNOW_MAGIC 0xB1
+#define ESPNOW_MAGIC_BUTTON 0xB1
+#define ESPNOW_MAGIC_ACCEL 0xB2
 #define ESPNOW_CHANNEL 1
 
 typedef struct __attribute__((packed)) {
   uint8_t magic;
   uint8_t button;
   uint16_t seq;
-} espnow_msg_t;
+} espnow_button_msg_t;
+
+typedef struct __attribute__((packed)) {
+  uint8_t magic;
+  int16_t x;
+  int16_t y;
+  int16_t z;
+  uint16_t seq;
+} espnow_accel_msg_t;
 
 static void onEspNowRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
-  if (len != (int)sizeof(espnow_msg_t)) return;
-  const espnow_msg_t *msg = reinterpret_cast<const espnow_msg_t *>(data);
-  if (msg->magic != ESPNOW_MAGIC) return;
-  if (!isalnum(msg->button)) return;
+  if (len < 1) return;
+  uint8_t magic = data[0];
 
-  Serial.printf("EVT,%02X:%02X:%02X:%02X:%02X:%02X,%c,%u\n",
-                info->src_addr[0], info->src_addr[1], info->src_addr[2],
-                info->src_addr[3], info->src_addr[4], info->src_addr[5],
-                msg->button, msg->seq);
+  if (magic == ESPNOW_MAGIC_BUTTON && len == (int)sizeof(espnow_button_msg_t)) {
+    const espnow_button_msg_t *msg = reinterpret_cast<const espnow_button_msg_t *>(data);
+    if (!isalnum(msg->button)) return;
+
+    Serial.printf("EVT,%02X:%02X:%02X:%02X:%02X:%02X,%c,%u\n",
+                  info->src_addr[0], info->src_addr[1], info->src_addr[2],
+                  info->src_addr[3], info->src_addr[4], info->src_addr[5],
+                  msg->button, msg->seq);
+  } else if (magic == ESPNOW_MAGIC_ACCEL && len == (int)sizeof(espnow_accel_msg_t)) {
+    const espnow_accel_msg_t *msg = reinterpret_cast<const espnow_accel_msg_t *>(data);
+
+    Serial.printf("ACC,%02X:%02X:%02X:%02X:%02X:%02X,%d,%d,%d,%u\n",
+                  info->src_addr[0], info->src_addr[1], info->src_addr[2],
+                  info->src_addr[3], info->src_addr[4], info->src_addr[5],
+                  msg->x, msg->y, msg->z, msg->seq);
+  }
 }
 
 void setup() {

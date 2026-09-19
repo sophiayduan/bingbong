@@ -7,13 +7,42 @@
 
 	const PLAYER_COLORS = ['bg-rose-500', 'bg-sky-500', 'bg-emerald-500', 'bg-amber-500'];
 
+	// C major scale, one octave. Button letters map onto this in order
+	// (A -> C4, B -> D4, ...) and wrap around for badges with more buttons.
+	const C_MAJOR_SCALE: { note: string; freq: number }[] = [
+		{ note: 'C4', freq: 261.63 },
+		{ note: 'D4', freq: 293.66 },
+		{ note: 'E4', freq: 329.63 },
+		{ note: 'F4', freq: 349.23 },
+		{ note: 'G4', freq: 392.0 },
+		{ note: 'A4', freq: 440.0 },
+		{ note: 'B4', freq: 493.88 },
+		{ note: 'C5', freq: 523.25 }
+	];
+
+	function noteForButton(button: string) {
+		const letter = button.trim().toUpperCase().charCodeAt(0) - 'A'.charCodeAt(0);
+		const index = ((letter % C_MAJOR_SCALE.length) + C_MAJOR_SCALE.length) % C_MAJOR_SCALE.length;
+		return C_MAJOR_SCALE[index];
+	}
+
 	type Status = 'idle' | 'connecting' | 'connected' | 'disconnected' | 'error';
 
 	type ButtonPress = {
 		id: number;
 		mac: string;
 		button: string;
+		note: string;
 		player: number;
+		time: string;
+	};
+
+	type AccelSample = {
+		mac: string;
+		player: number;
+		x: number;
+		y: number;
+		z: number;
 		time: string;
 	};
 
@@ -23,6 +52,7 @@
 	let errorMessage = $state('');
 	let events = $state<ButtonPress[]>([]);
 	let latest = $state<ButtonPress | null>(null);
+	let latestAccel = $state<AccelSample | null>(null);
 	let flash = $state(false);
 
 	let port: SerialPort | null = null;
@@ -31,6 +61,24 @@
 	const playerByMac = new Map<string, number>();
 	let nextEventId = 0;
 	let flashTimeout: ReturnType<typeof setTimeout> | undefined;
+	let audioCtx: AudioContext | null = null;
+
+	function playTone(freq: number) {
+		if (!audioCtx) return;
+		const osc = audioCtx.createOscillator();
+		const gain = audioCtx.createGain();
+		osc.type = 'sine';
+		osc.frequency.value = freq;
+
+		const now = audioCtx.currentTime;
+		gain.gain.setValueAtTime(0, now);
+		gain.gain.linearRampToValueAtTime(0.3, now + 0.01);
+		gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.4);
+
+		osc.connect(gain).connect(audioCtx.destination);
+		osc.start(now);
+		osc.stop(now + 0.4);
+	}
 
 	function colorFor(player: number) {
 		return PLAYER_COLORS[(player - 1) % PLAYER_COLORS.length];
@@ -45,30 +93,64 @@
 		return player;
 	}
 
-	// Gateway prints "EVT,<mac>,<button>,<seq>", e.g. "EVT,AA:BB:CC:DD:EE:FF,A,12"
+	// Gateway prints one of:
+	//   "EVT,<mac>,<button>,<seq>", e.g. "EVT,AA:BB:CC:DD:EE:FF,A,12"
+	//   "ACC,<mac>,<x>,<y>,<z>,<seq>", e.g. "ACC,AA:BB:CC:DD:EE:FF,120,-38,16200,412"
 	function handleLine(line: string) {
-		if (!line.startsWith('EVT,')) return;
+		if (line.startsWith('EVT,')) {
+			handleButtonLine(line);
+		} else if (line.startsWith('ACC,')) {
+			handleAccelLine(line);
+		}
+	}
+
+	function handleButtonLine(line: string) {
 		const parts = line.slice('EVT,'.length).split(',');
 		if (parts.length !== 3) return;
 		const [mac, button] = parts;
 		if (!mac || !button) return;
 
+		const { note, freq } = noteForButton(button);
+
 		const entry: ButtonPress = {
 			id: nextEventId++,
 			mac,
 			button,
+			note,
 			player: playerFor(mac),
 			time: new Date().toLocaleTimeString()
 		};
 
 		latest = entry;
 		events = [entry, ...events].slice(0, 50);
+		playTone(freq);
 
 		flash = true;
 		clearTimeout(flashTimeout);
 		flashTimeout = setTimeout(() => {
 			flash = false;
 		}, 200);
+	}
+
+	function handleAccelLine(line: string) {
+		const parts = line.slice('ACC,'.length).split(',');
+		if (parts.length !== 5) return;
+		const [mac, xStr, yStr, zStr] = parts;
+		if (!mac) return;
+
+		const x = Number(xStr);
+		const y = Number(yStr);
+		const z = Number(zStr);
+		if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return;
+
+		latestAccel = {
+			mac,
+			player: playerFor(mac),
+			x,
+			y,
+			z,
+			time: new Date().toLocaleTimeString()
+		};
 	}
 
 	async function readLoop() {
@@ -108,6 +190,10 @@
 
 		status = 'connecting';
 		errorMessage = '';
+
+		if (!audioCtx) {
+			audioCtx = new AudioContext();
+		}
 
 		try {
 			port = await navigator.serial.requestPort({ filters: [{ usbVendorId: USB_VENDOR_ID }] });
@@ -189,10 +275,22 @@
 				? 'scale-110'
 				: 'scale-100'} {latest ? colorFor(latest.player) : 'bg-slate-900'}"
 		>
-			{latest ? latest.button : '--'}
+			{latest ? latest.note : '--'}
 		</div>
 		{#if latest}
-			<p class="text-slate-400">Player {latest.player} · {latest.mac} · {latest.time}</p>
+			<p class="text-slate-400">
+				Player {latest.player} · button {latest.button} · {latest.mac} · {latest.time}
+			</p>
+		{/if}
+
+		{#if latestAccel}
+			<div class="w-full max-w-md rounded bg-slate-900 px-3 py-2 text-sm">
+				<span class="flex items-center gap-2">
+					<span class="h-2 w-2 rounded-full {colorFor(latestAccel.player)}"></span>
+					Player {latestAccel.player} accel · x {latestAccel.x} · y {latestAccel.y} · z {latestAccel.z}
+					<span class="ml-auto text-slate-500">{latestAccel.time}</span>
+				</span>
+			</div>
 		{/if}
 
 		<div class="w-full max-w-md">
@@ -204,7 +302,7 @@
 					<li class="flex items-center justify-between rounded bg-slate-900 px-3 py-2 text-sm">
 						<span class="flex items-center gap-2">
 							<span class="h-2 w-2 rounded-full {colorFor(e.player)}"></span>
-							Player {e.player} pressed <strong>{e.button}</strong>
+							Player {e.player} pressed <strong>{e.button}</strong> → {e.note}
 						</span>
 						<span class="text-slate-500">{e.time}</span>
 					</li>

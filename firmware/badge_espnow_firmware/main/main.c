@@ -1,11 +1,12 @@
-// Custom badge firmware: reads the 8 shift-register buttons + Start, and
-// broadcasts each button press over ESP-NOW so an ESP32-C6 gateway nearby
-// can pick it up (see the xiao_espnow_gateway sketch). Also brings up the
-// ST7789 screen and displays a static QR code the whole time it's on.
+// Custom badge firmware: reads the 8 shift-register buttons + Start and the
+// SC7A20HTR accelerometer, and broadcasts both over ESP-NOW so an ESP32-C6
+// gateway nearby can pick them up (see the xiao_espnow_gateway sketch). Also
+// brings up the ST7789 screen and displays a static QR code the whole time
+// it's on.
 //
 // Hardware reference: badge.hackthenorth.com/custom-flash (ESP32-C3-MINI-1-N4).
-// This firmware touches buttons, Wi-Fi/ESP-NOW, and the screen; it does not
-// init the LEDs, accelerometer, or NFC.
+// This firmware touches buttons, the accelerometer, Wi-Fi/ESP-NOW, and the
+// screen; it does not init the LEDs or NFC.
 
 #include <string.h>
 #include "freertos/FreeRTOS.h"
@@ -18,6 +19,7 @@
 #include "esp_rom_sys.h"
 #include "nvs_flash.h"
 #include "driver/gpio.h"
+#include "accel.h"
 #include "lcd.h"
 
 static const char *TAG = "badge_espnow";
@@ -48,20 +50,37 @@ static const char BUTTON_CODE[BTN_COUNT] = {
 };
 
 // ---- ESP-NOW wire format ----
-// A broadcast frame, so any ESP-NOW-capable device nearby could technically
-// receive it (no pairing needed for broadcast). The magic byte lets the
-// gateway ignore anything that isn't from this firmware.
-#define ESPNOW_MAGIC 0xB1
+// Broadcast frames, so any ESP-NOW-capable device nearby could technically
+// receive them (no pairing needed for broadcast). The magic byte lets the
+// gateway ignore anything that isn't from this firmware, and tells the two
+// message types apart (they're different sizes too, but magic is checked
+// first).
+#define ESPNOW_MAGIC_BUTTON 0xB1
+#define ESPNOW_MAGIC_ACCEL 0xB2
 #define ESPNOW_CHANNEL 1
 
+// Accelerometer samples are broadcast at 1/ACCEL_SAMPLE_EVERY_N_LOOPS of the
+// button poll rate (10 ms loop -> 50 ms / 20 Hz) so they don't dominate
+// ESP-NOW airtime alongside button presses.
+#define ACCEL_SAMPLE_EVERY_N_LOOPS 5
+
 typedef struct __attribute__((packed)) {
-    uint8_t magic;    // ESPNOW_MAGIC
+    uint8_t magic;    // ESPNOW_MAGIC_BUTTON
     uint8_t button;   // ASCII code from BUTTON_CODE
     uint16_t seq;     // increments per press; gateway can spot loss/reorder
-} espnow_msg_t;
+} espnow_button_msg_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t magic;    // ESPNOW_MAGIC_ACCEL
+    int16_t x;
+    int16_t y;
+    int16_t z;
+    uint16_t seq;     // increments per sample; gateway can spot loss/reorder
+} espnow_accel_msg_t;
 
 static const uint8_t BROADCAST_ADDR[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 static uint16_t s_seq = 0;
+static uint16_t s_accel_seq = 0;
 
 static void hc165_gpio_init(void) {
     gpio_config_t data_cfg = {
@@ -105,8 +124,8 @@ static void hc165_read(bool pressed[8]) {
 }
 
 static void send_button(button_id_t id) {
-    espnow_msg_t msg = {
-        .magic = ESPNOW_MAGIC,
+    espnow_button_msg_t msg = {
+        .magic = ESPNOW_MAGIC_BUTTON,
         .button = (uint8_t)BUTTON_CODE[id],
         .seq = ++s_seq,
     };
@@ -115,6 +134,20 @@ static void send_button(button_id_t id) {
         ESP_LOGI(TAG, "sent button '%c' (seq %u)", msg.button, msg.seq);
     } else {
         ESP_LOGW(TAG, "esp_now_send failed for '%c': %s", msg.button, esp_err_to_name(err));
+    }
+}
+
+static void send_accel(int16_t x, int16_t y, int16_t z) {
+    espnow_accel_msg_t msg = {
+        .magic = ESPNOW_MAGIC_ACCEL,
+        .x = x,
+        .y = y,
+        .z = z,
+        .seq = ++s_accel_seq,
+    };
+    esp_err_t err = esp_now_send(BROADCAST_ADDR, (const uint8_t *)&msg, sizeof(msg));
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "esp_now_send failed for accel sample: %s", esp_err_to_name(err));
     }
 }
 
@@ -150,6 +183,10 @@ void app_main(void) {
     hc165_gpio_init();
     espnow_init();
 
+    if (!accel_init()) {
+        ESP_LOGW(TAG, "accelerometer init failed - continuing without it");
+    }
+
     esp_lcd_panel_handle_t panel = lcd_init();
     lcd_draw_image(panel);
 
@@ -161,6 +198,8 @@ void app_main(void) {
     bool start_last_raw = start_stable;
 
     ESP_LOGI(TAG, "Button poll loop starting.");
+
+    uint32_t loop_count = 0;
 
     while (1) {
         hc165_read(raw);
@@ -185,6 +224,14 @@ void app_main(void) {
             }
         }
         start_last_raw = start_raw;
+
+        loop_count++;
+        if (loop_count % ACCEL_SAMPLE_EVERY_N_LOOPS == 0) {
+            int16_t x, y, z;
+            if (accel_read(&x, &y, &z)) {
+                send_accel(x, y, z);
+            }
+        }
 
         vTaskDelay(pdMS_TO_TICKS(10));
     }
