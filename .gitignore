@@ -21,3 +21,7 @@ Thumbs.db
 # Vite
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# ESP-IDF (firmware/badge_espnow_firmware)
+firmware/badge_espnow_firmware/build
+firmware/badge_espnow_firmware/sdkconfig

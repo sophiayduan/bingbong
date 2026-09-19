@@ -1,0 +1,4 @@
+# Badge's console is native USB-Serial-JTAG, not UART0 (per the Custom Flash
+# HAL guide). Without this, idf.py monitor / ESP_LOG* output goes nowhere.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
