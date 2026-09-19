@@ -151,7 +151,7 @@ void app_main(void) {
     espnow_init();
 
     esp_lcd_panel_handle_t panel = lcd_init();
-    lcd_draw_qr(panel);
+    lcd_draw_image(panel);
 
     bool raw[8], stable[8], last_raw[8];
     hc165_read(stable);

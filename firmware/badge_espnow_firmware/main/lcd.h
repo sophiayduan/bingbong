@@ -6,6 +6,5 @@
 // a ready-to-draw panel handle.
 esp_lcd_panel_handle_t lcd_init(void);
 
-// Fills the screen white and draws the embedded QR code (qr_code.h), sized
-// and centered with a proper quiet-zone margin so it stays scannable.
-void lcd_draw_qr(esp_lcd_panel_handle_t panel);
+// Draws the embedded 320x240 badge image (badge_image.h) full-screen.
+void lcd_draw_image(esp_lcd_panel_handle_t panel);
