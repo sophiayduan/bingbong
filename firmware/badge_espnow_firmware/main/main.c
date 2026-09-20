@@ -74,6 +74,12 @@ static const char BUTTON_CODE[BTN_COUNT] = {
 // forever with no separate ack.
 #define HELLO_RETRY_LOOPS 200
 
+// Once assigned, HELLO doubles as a keepalive ping so the server can tell a
+// badge that's gone out of range or lost power from one that's just sitting
+// idle (see checkLiveness in src/lib/game-state.svelte.ts, which disconnects
+// a badge after 5s of silence - well clear of this interval).
+#define IDLE_PING_LOOPS 300
+
 // Accelerometer samples are broadcast at 1/ACCEL_SAMPLE_EVERY_N_LOOPS of the
 // button poll rate (10 ms loop -> 50 ms / 20 Hz) so they don't dominate
 // ESP-NOW airtime alongside button presses.
@@ -117,6 +123,9 @@ static volatile bool s_joined = false;
 static volatile bool s_redraw_pending = false;
 static volatile const uint8_t *s_pending_banner = NULL;
 static volatile uint8_t s_creature = 0;
+static uint32_t s_loop_count = 0;
+// Loop count of the last thing sent (button or HELLO)
+static uint32_t s_last_send_loop = 0;
 
 static void hc165_gpio_init(void) {
     gpio_config_t data_cfg = {
@@ -168,6 +177,7 @@ static void send_button(button_id_t id) {
     esp_err_t err = esp_now_send(BROADCAST_ADDR, (const uint8_t *)&msg, sizeof(msg));
     if (err == ESP_OK) {
         ESP_LOGI(TAG, "sent button '%c' (seq %u)", msg.button, msg.seq);
+        s_last_send_loop = s_loop_count;
     } else {
         ESP_LOGW(TAG, "esp_now_send failed for '%c': %s", msg.button, esp_err_to_name(err));
     }
@@ -204,6 +214,7 @@ static void send_hello(void) {
     esp_err_t err = esp_now_send(BROADCAST_ADDR, (const uint8_t *)&msg, sizeof(msg));
     if (err == ESP_OK) {
         ESP_LOGI(TAG, "sent hello (seq %u, assigned=%d joined=%d)", msg.seq, s_assigned, s_joined);
+        s_last_send_loop = s_loop_count;
     } else {
         ESP_LOGW(TAG, "esp_now_send failed for hello: %s", esp_err_to_name(err));
     }
@@ -295,8 +306,6 @@ void app_main(void) {
     ESP_LOGI(TAG, "Button poll loop starting.");
     send_hello();
 
-    uint32_t loop_count = 0;
-
     while (1) {
         hc165_read(raw);
         bool start_raw = (gpio_get_level(PIN_START) == 0);
@@ -333,13 +342,17 @@ void app_main(void) {
             lcd_draw_banner(s_panel, banner, label);
         }
 
-        loop_count++;
-        if (!s_assigned && loop_count % HELLO_RETRY_LOOPS == 0) {
+        s_loop_count++;
+        if (!s_assigned) {
+            if (s_loop_count % HELLO_RETRY_LOOPS == 0) {
+                send_hello();
+            }
+        } else if (s_loop_count - s_last_send_loop >= IDLE_PING_LOOPS) {
             send_hello();
         }
 
         // Paused: accel broadcasts were rate-limiting ESP-NOW.
-        // if (loop_count % ACCEL_SAMPLE_EVERY_N_LOOPS == 0) {
+        // if (s_loop_count % ACCEL_SAMPLE_EVERY_N_LOOPS == 0) {
         //     int16_t x, y, z;
         //     if (accel_read(&x, &y, &z)) {
         //         send_accel(x, y, z);

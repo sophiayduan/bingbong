@@ -80,9 +80,9 @@ class GameState {
 	playerStates = $state<Map<number, PlayerState>>(new Map());
 	latestAccel = $state<AccelSample | null>(null);
 	secondsLeft = $state(JOIN_SECONDS);
-	// mac -> creature id (0-3). Separate from playerStates: a badge gets a
-	// creature the instant it HELLOs (before anyone's pressed a button), and
-	// player numbers are still join order, not creature identity.
+	// mac -> creature id (0-3), always player number - 1 (see handleHello).
+	// Separate from playerStates because a badge gets this the instant it
+	// HELLOs, before anyone's pressed a button.
 	creatureByMac = $state<Map<string, number>>(new Map());
 
 	private hasStartedPlay = false;
@@ -96,6 +96,11 @@ class GameState {
 	private flashTimeouts = new Map<number, ReturnType<typeof setTimeout>>();
 	private audioCtx: AudioContext | null = null;
 	private countdownInterval: ReturnType<typeof setInterval> | undefined;
+	// Badges ping every ~3s even when idle (see main.c), so anything quiet
+	// for longer than this has gone out of range or lost power.
+	private static readonly DISCONNECT_AFTER_MS = 5000;
+	private lastSeenByMac = new Map<string, number>();
+	private livenessInterval: ReturnType<typeof setInterval> | undefined;
 
 	private playTone(freq: number) {
 		if (!this.audioCtx) return;
@@ -123,6 +128,28 @@ class GameState {
 		return player;
 	}
 
+	private touchSeen(mac: string) {
+		this.lastSeenByMac.set(mac, Date.now());
+	}
+
+	// A badge's slot/creature (playerByMac/creatureByMac) is permanent for the
+	// session - going quiet only clears the visible "joined" state, so a badge
+	// that comes back lands right back in the same spot instead of taking a
+	// new one.
+	private checkLiveness() {
+		const cutoff = Date.now() - GameState.DISCONNECT_AFTER_MS;
+		let next: Map<number, PlayerState> | undefined;
+		for (const [mac, lastSeen] of this.lastSeenByMac) {
+			if (lastSeen > cutoff) continue;
+			const player = this.playerByMac.get(mac);
+			if (player === undefined) continue;
+			if (!(next ?? this.playerStates).has(player)) continue;
+			next ??= new Map(this.playerStates);
+			next.delete(player);
+		}
+		if (next) this.playerStates = next;
+	}
+
 	private async sendLine(line: string) {
 		if (!this.writer) return;
 		try {
@@ -136,48 +163,22 @@ class GameState {
 		this.sendLine(`ASSIGN,${mac},${creature}`);
 	}
 
-	// Assigns creature to mac. If another badge already holds it, they swap -
-	// by construction there's never more than one badge per creature.
-	assignCreature(mac: string, creature: number) {
-		const next = new Map(this.creatureByMac);
-		const previousHolder = [...next.entries()].find(
-			([holderMac, id]) => id === creature && holderMac !== mac
-		)?.[0];
-		const displaced = next.get(mac);
-
-		next.set(mac, creature);
-		this.sendAssign(mac, creature);
-
-		if (previousHolder !== undefined) {
-			if (displaced !== undefined) {
-				next.set(previousHolder, displaced);
-				this.sendAssign(previousHolder, displaced);
-			} else {
-				// mac had no creature yet (shouldn't happen once handshake has run -
-				// HELLO always beats the first possible button press) - previousHolder
-				// just loses theirs, with no assign message since there's no "none".
-				next.delete(previousHolder);
-			}
-		}
-
-		this.creatureByMac = next;
-	}
-
-	// A HELLO either means "I'm new, give me a creature" or "I never got your
-	// last ASSIGN, resend it" - same handler either way, since resending the
-	// existing assignment is a no-op for a badge that already got it.
+	// Creature is just the player slot number - slot 0 is always creature 0,
+	// forever. No swapping, no reassignment: a badge's position and creature
+	// are the same fixed thing for the whole session, decided once, the first
+	// time it says hello.
 	private handleHello(mac: string) {
-		const existing = this.creatureByMac.get(mac);
-		if (existing !== undefined) {
-			this.sendAssign(mac, existing);
-			return;
+		this.touchSeen(mac);
+		const player = this.playerFor(mac);
+		const creature = player - 1;
+		if (creature >= CREATURES.length) return; // all slots already taken
+
+		if (this.creatureByMac.get(mac) !== creature) {
+			const next = new Map(this.creatureByMac);
+			next.set(mac, creature);
+			this.creatureByMac = next;
 		}
-
-		const used = new Set(this.creatureByMac.values());
-		const free = CREATURES.findIndex((_, id) => !used.has(id));
-		if (free === -1) return; // all 4 creatures already spoken for
-
-		this.assignCreature(mac, free);
+		this.sendAssign(mac, creature);
 	}
 
 	startJoinCountdown() {
@@ -218,6 +219,7 @@ class GameState {
 		if (parts.length !== 3) return;
 		const [mac, button] = parts;
 		if (!mac || !button) return;
+		this.touchSeen(mac);
 
 		// Button picks the scale degree as always; creature (if assigned yet)
 		// shifts that note's register up/down to its own "call".
@@ -263,6 +265,7 @@ class GameState {
 		if (parts.length !== 5) return;
 		const [mac, xStr, yStr, zStr] = parts;
 		if (!mac) return;
+		this.touchSeen(mac);
 
 		const x = Number(xStr);
 		const y = Number(yStr);
@@ -335,12 +338,16 @@ class GameState {
 
 			// Fresh game session: forget any players/events from a prior connection.
 			this.playerByMac.clear();
+			this.lastSeenByMac.clear();
 			this.playerStates = new Map();
 			this.creatureByMac = new Map();
 			this.events = [];
 			this.hasStartedPlay = false;
 			goto('/');
 			this.startJoinCountdown();
+
+			clearInterval(this.livenessInterval);
+			this.livenessInterval = setInterval(() => this.checkLiveness(), 1000);
 
 			this.readLoop();
 		} catch (err) {
@@ -352,6 +359,8 @@ class GameState {
 	async disconnect() {
 		clearInterval(this.countdownInterval);
 		this.countdownInterval = undefined;
+		clearInterval(this.livenessInterval);
+		this.livenessInterval = undefined;
 		try {
 			await this.reader?.cancel();
 		} catch {
