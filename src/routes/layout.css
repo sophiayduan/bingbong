@@ -1,1 +1,15 @@
 @import 'tailwindcss';
+
+@theme {
+    --font-cloud: 'Cloud';
+    --color-blue: #93e2ff;
+    --color-light-green: #9ddba5;
+    --color-green: #7cc47a;
+    --color-brown: #ad855b;
+}
+@font-face {
+    font-family: 'Cloud';
+    src: url('$lib/fonts/Cloudy.ttf') format('truetype');
+    font-style: normal;
+    font-display: swap;
+}
