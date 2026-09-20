@@ -1,7 +1,10 @@
 <script lang="ts">
 	import './layout.css';
 	import favicon from '$lib/assets/favicon.svg';
-	import background from '$lib/images/background.webp';
+	import bg1 from '$lib/images/bg/bg-1.webp';
+	import bg2 from '$lib/images/bg/bg-2.webp';
+	import bg3 from '$lib/images/bg/bg-3.webp';
+	import bg4 from '$lib/images/bg/bg-4.webp';
 	import intenseTl from '$lib/images/intense-tl.webp';
 	import intenseTr from '$lib/images/intense-tr.webp';
 	import intenseBl from '$lib/images/intense-bl.webp';
@@ -71,11 +74,17 @@
 </svelte:head>
 
 <div
-	class="absolute inset-0 -z-10 bg-light-blue bg-cover bg-center bg-no-repeat transition-transform duration-[1200ms] ease-in-out {gameState.hasStartedPlay
+	class="absolute inset-0 -z-10 grid bg-blue transition-transform duration-[1200ms] ease-in-out {gameState.hasStartedPlay
 		? 'translate-y-40'
 		: ''}"
-	style="background-image: url({background});"
-></div>
+>
+	<!-- bg-1 (the closest layer) isn't here - it's rendered after <main> below
+	     instead, so falling notes can pass in front of it and disappear
+	     behind it, while staying above these three farther layers. -->
+	<img src={bg4} alt="" class="z-10 col-start-1 row-start-1 mt-auto w-full" />
+	<img src={bg3} alt="" class="z-20 col-start-1 row-start-1 mt-auto w-full" />
+	<img src={bg2} alt="" class="z-30 col-start-1 row-start-1 mt-auto w-full" />
+</div>
 <!-- INTENSE MODE -->
 <!-- <div
 	class="pointer-events-none fixed inset-0 z-50 "
@@ -199,6 +208,18 @@
 		{@render children()}
 	{/if}
 </main>
+
+<!-- The closest ground layer, kept out of the background stack above and
+     given a real (positive) z-index of its own so it sits in front of
+     everything in <main> - notes fall past the hit bar and disappear
+     behind this, rather than the reverse. -->
+<div
+	class="pointer-events-none absolute inset-0 z-10 grid transition-transform duration-[1200ms] ease-in-out {gameState.hasStartedPlay
+		? 'translate-y-40'
+		: ''}"
+>
+	<img src={bg1} alt="" class="mt-auto w-full" />
+</div>
 
 <Countdown />
 {#if import.meta.env.DEV}

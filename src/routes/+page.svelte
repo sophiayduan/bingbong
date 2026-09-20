@@ -16,11 +16,16 @@
 		}
 		const endRect = circlesEl.getBoundingClientRect();
 		const deltaY = startRect.top - endRect.top;
+		// Animated via `top`, not GSAP's `y` (which uses a CSS transform) -
+		// a transform on this element would create a stacking context that
+		// traps everything inside it (both the note lanes and the character
+		// row) together, breaking the z-index split that lets characters
+		// sit above the ground layer while notes stay behind it.
 		gsap.fromTo(
 			circlesEl,
-			{ y: deltaY },
+			{ top: deltaY },
 			{
-				y: 0,
+				top: 0,
 				duration: 1.2,
 				ease: 'power2.inOut',
 				onComplete: () => gameState.startCountdown()
@@ -38,7 +43,10 @@
 		}
 	});
 </script>
-<div bind:this={circlesEl} class={gameState.hasStartedPlay ? 'h-full' : 'mt-30 lg:mt-60'}>
+<div
+	bind:this={circlesEl}
+	class="relative {gameState.hasStartedPlay ? 'h-full' : 'mt-30 lg:mt-60'}"
+>
 <PlayerCircles big={true} />
 
 </div>
@@ -47,7 +55,7 @@
 	<button
 		onclick={handleNext}
 		disabled={gameState.playerStates.size === 0}
-		class="fixed bottom-6 right-6 rounded-lg bg-dark-blue px-5 py-2 text-2xl font-jua font-semibold text-white shadow-xl transition hover:bg-blue-700/80 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-dark-blue"
+		class="fixed bottom-6 right-6 z-[110] rounded-lg bg-dark-blue px-5 py-2 text-2xl font-jua font-semibold text-white shadow-xl transition hover:bg-blue-700/80 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-dark-blue"
 	>
 		Next
 	</button>
@@ -55,7 +63,7 @@
 	{#if import.meta.env.DEV}
 		<button
 			onclick={handleNext}
-			class="fixed bottom-6 left-6 rounded-lg bg-slate-700/70 px-3 py-1.5 text-sm font-jua text-white/70 shadow transition hover:bg-slate-600"
+			class="fixed bottom-6 left-6 z-[110] rounded-lg bg-slate-700/70 px-3 py-1.5 text-sm font-jua text-white/70 shadow transition hover:bg-slate-600"
 		>
 			Dev: skip to game
 		</button>
