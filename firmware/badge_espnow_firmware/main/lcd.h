@@ -13,3 +13,8 @@ esp_lcd_panel_handle_t lcd_init(void);
 // only for the log line (e.g. "bingbong", "press-to-join", "goose"), so
 // redraws are visible on serial without staring at the physical screen.
 void lcd_draw_banner(esp_lcd_panel_handle_t panel, const uint8_t *banner, const char *label);
+
+// Draws the full creature screen: shared background, the creature's sprite
+// on the left, its slot name and flavor text on the right (see
+// creature_screens.h / gen_creature_screens.py).
+void lcd_draw_creature_screen(esp_lcd_panel_handle_t panel, uint8_t creature);
