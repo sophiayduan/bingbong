@@ -8,11 +8,22 @@
 // USB serial port, which the website reads directly via the Web Serial API
 // (see src/routes/+page.svelte) - a raw byte stream with no radio scheduling.
 //
+// Also relays the creature handshake both ways: a badge's HELLO goes up to
+// the website as a serial line, and the website's ASSIGN command comes back
+// down over serial to be unicast to that one badge (see
+// src/lib/game-state.svelte.ts and badge_espnow_firmware/main/main.c).
+//
 // Output format, one line per event:
 //   EVT,<mac>,<button>,<seq>\n
 //   ACC,<mac>,<x>,<y>,<z>,<seq>\n
+//   HELLO,<mac>,<seq>\n
 // e.g. EVT,28:84:85:EA:78:4C,B,97
 //      ACC,28:84:85:EA:78:4C,120,-38,16200,412
+//      HELLO,28:84:85:EA:78:4C,3
+//
+// Input format, one line per command, from the website over serial:
+//   ASSIGN,<mac>,<creature>\n
+// e.g. ASSIGN,28:84:85:EA:78:4C,2
 //
 // Board: Boards Manager > esp32 (Espressif) >= 3.0.0
 //        Tools > Board > XIAO_ESP32C6 (or ESP32C6 Dev Module)
@@ -26,6 +37,8 @@
 // ---- Must match badge_espnow_firmware/main/main.c ----
 #define ESPNOW_MAGIC_BUTTON 0xB1
 #define ESPNOW_MAGIC_ACCEL 0xB2
+#define ESPNOW_MAGIC_HELLO 0xB3
+#define ESPNOW_MAGIC_ASSIGN 0xB4
 #define ESPNOW_CHANNEL 1
 
 typedef struct __attribute__((packed)) {
@@ -41,6 +54,16 @@ typedef struct __attribute__((packed)) {
   int16_t z;
   uint16_t seq;
 } espnow_accel_msg_t;
+
+typedef struct __attribute__((packed)) {
+  uint8_t magic;
+  uint16_t seq;
+} espnow_hello_msg_t;
+
+typedef struct __attribute__((packed)) {
+  uint8_t magic;
+  uint8_t creature;
+} espnow_assign_msg_t;
 
 static void onEspNowRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
   if (len < 1) return;
@@ -61,11 +84,84 @@ static void onEspNowRecv(const esp_now_recv_info_t *info, const uint8_t *data, i
                   info->src_addr[0], info->src_addr[1], info->src_addr[2],
                   info->src_addr[3], info->src_addr[4], info->src_addr[5],
                   msg->x, msg->y, msg->z, msg->seq);
+  } else if (magic == ESPNOW_MAGIC_HELLO && len == (int)sizeof(espnow_hello_msg_t)) {
+    const espnow_hello_msg_t *msg = reinterpret_cast<const espnow_hello_msg_t *>(data);
+
+    Serial.printf("HELLO,%02X:%02X:%02X:%02X:%02X:%02X,%u\n",
+                  info->src_addr[0], info->src_addr[1], info->src_addr[2],
+                  info->src_addr[3], info->src_addr[4], info->src_addr[5],
+                  msg->seq);
   }
+}
+
+// Parses "AA:BB:CC:DD:EE:FF" into 6 bytes. Returns false (and leaves mac
+// untouched) on anything malformed, so a corrupt serial line can't turn
+// into a send to a garbage address.
+static bool parseMac(const String &text, uint8_t mac[6]) {
+  if (text.length() != 17) return false;
+  uint8_t parsed[6];
+  for (int i = 0; i < 6; i++) {
+    if (i < 5 && text[i * 3 + 2] != ':') return false;
+    char hex[3] = { text[i * 3], text[i * 3 + 1], '\0' };
+    char *end;
+    long value = strtol(hex, &end, 16);
+    if (end != hex + 2) return false;
+    parsed[i] = (uint8_t)value;
+  }
+  memcpy(mac, parsed, 6);
+  return true;
+}
+
+// Adds mac as a unicast peer if it isn't already one - repeat ASSIGNs to the
+// same badge (a manual reassign, or the join-race fallback) would otherwise
+// fail with ESP_ERR_ESPNOW_EXIST.
+static bool ensurePeer(const uint8_t mac[6]) {
+  if (esp_now_is_peer_exist(mac)) return true;
+
+  esp_now_peer_info_t peer = {0};
+  memcpy(peer.peer_addr, mac, 6);
+  peer.channel = ESPNOW_CHANNEL;
+  peer.ifidx = WIFI_IF_STA;
+  peer.encrypt = false;
+  return esp_now_add_peer(&peer) == ESP_OK;
+}
+
+// Handles "ASSIGN,<mac>,<creature>\n" from the website and unicasts it to
+// that one badge.
+static void handleSerialLine(const String &line) {
+  if (!line.startsWith("ASSIGN,")) return;
+
+  int firstComma = line.indexOf(',');
+  int secondComma = line.indexOf(',', firstComma + 1);
+  if (secondComma < 0) return;
+
+  String macText = line.substring(firstComma + 1, secondComma);
+  String creatureText = line.substring(secondComma + 1);
+
+  uint8_t mac[6];
+  if (!parseMac(macText, mac)) return;
+
+  long creature = creatureText.toInt();
+  if (creature < 0 || creature > 3) return;
+
+  if (!ensurePeer(mac)) {
+    Serial.println("[espnow] failed to add peer for ASSIGN");
+    return;
+  }
+
+  espnow_assign_msg_t msg = {
+    .magic = ESPNOW_MAGIC_ASSIGN,
+    .creature = (uint8_t)creature,
+  };
+  esp_now_send(mac, (const uint8_t *)&msg, sizeof(msg));
 }
 
 void setup() {
   Serial.begin(115200);
+  // readStringUntil() defaults to a 1000ms timeout on a partial line, which
+  // would stall the receive side of loop() for that long on every ragged
+  // read - the whole point of dropping the old delay(1000).
+  Serial.setTimeout(50);
   delay(1000);
   Serial.println("ESP-NOW badge gateway starting...");
 
@@ -83,5 +179,9 @@ void setup() {
 }
 
 void loop() {
-  delay(1000);
+  if (Serial.available()) {
+    String line = Serial.readStringUntil('\n');
+    line.trim();
+    if (line.length() > 0) handleSerialLine(line);
+  }
 }

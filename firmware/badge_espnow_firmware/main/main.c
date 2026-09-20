@@ -1,13 +1,18 @@
 // Custom badge firmware: reads the 8 shift-register buttons + Start and the
 // SC7A20HTR accelerometer, and broadcasts both over ESP-NOW so an ESP32-C6
 // gateway nearby can pick them up (see the xiao_espnow_gateway sketch). Also
-// brings up the ST7789 screen and displays a static QR code the whole time
-// it's on.
+// drives the ST7789 screen through three states, entirely from information
+// the badge already has locally - no extra wire messages needed:
+//   "BINGBONG"                -> boot, before any ASSIGN has ever arrived
+//   "PRESS ANY KEY TO JOIN"   -> ASSIGN received, no local button press yet
+//   <creature name>           -> first local button press after ASSIGN
+// (see the HELLO/ASSIGN handshake below and src/lib/game-state.svelte.ts).
 //
 // Hardware reference: badge.hackthenorth.com/custom-flash (ESP32-C3-MINI-1-N4).
 // This firmware touches buttons, the accelerometer, Wi-Fi/ESP-NOW, and the
 // screen; it does not init the LEDs or NFC.
 
+#include <stdio.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -21,6 +26,7 @@
 #include "driver/gpio.h"
 #include "accel.h"
 #include "lcd.h"
+#include "creature_banners.h"
 
 static const char *TAG = "badge_espnow";
 
@@ -57,7 +63,16 @@ static const char BUTTON_CODE[BTN_COUNT] = {
 // first).
 #define ESPNOW_MAGIC_BUTTON 0xB1
 #define ESPNOW_MAGIC_ACCEL 0xB2
+// Handshake: badge broadcasts HELLO until the gateway's ASSIGN reply names a
+// creature slot (see xiao_espnow_gateway.ino / src/lib/game-state.svelte.ts).
+#define ESPNOW_MAGIC_HELLO 0xB3
+#define ESPNOW_MAGIC_ASSIGN 0xB4
 #define ESPNOW_CHANNEL 1
+
+// Resend HELLO at this loop-count interval until assigned; the server
+// re-sends the same creature for a repeat HELLO, so this is safe to retry
+// forever with no separate ack.
+#define HELLO_RETRY_LOOPS 200
 
 // Accelerometer samples are broadcast at 1/ACCEL_SAMPLE_EVERY_N_LOOPS of the
 // button poll rate (10 ms loop -> 50 ms / 20 Hz) so they don't dominate
@@ -78,9 +93,30 @@ typedef struct __attribute__((packed)) {
     uint16_t seq;     // increments per sample; gateway can spot loss/reorder
 } espnow_accel_msg_t;
 
+typedef struct __attribute__((packed)) {
+    uint8_t magic;    // ESPNOW_MAGIC_HELLO
+    uint16_t seq;
+} espnow_hello_msg_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t magic;    // ESPNOW_MAGIC_ASSIGN
+    uint8_t creature; // 0-3, see creature_banners.h
+} espnow_assign_msg_t;
+
 static const uint8_t BROADCAST_ADDR[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 static uint16_t s_seq = 0;
 static uint16_t s_accel_seq = 0;
+static uint16_t s_hello_seq = 0;
+
+static esp_lcd_panel_handle_t s_panel;
+static volatile bool s_assigned = false;
+// Set the instant a button on THIS badge is pressed, entirely locally - no
+// server round trip needed, unlike s_assigned. Read from onEspNowRecv (the
+// WiFi task) to decide what a fresh ASSIGN should draw.
+static volatile bool s_joined = false;
+static volatile bool s_redraw_pending = false;
+static volatile const uint8_t *s_pending_banner = NULL;
+static volatile uint8_t s_creature = 0;
 
 static void hc165_gpio_init(void) {
     gpio_config_t data_cfg = {
@@ -135,6 +171,15 @@ static void send_button(button_id_t id) {
     } else {
         ESP_LOGW(TAG, "esp_now_send failed for '%c': %s", msg.button, esp_err_to_name(err));
     }
+
+    // First press on this badge, ever: swap the "press any key to join"
+    // screen for the assigned creature's name. Runs on the poll loop thread
+    // already, so the draw happens right here instead of through the
+    // s_redraw_pending handoff onEspNowRecv needs.
+    if (s_assigned && !s_joined) {
+        s_joined = true;
+        lcd_draw_banner(s_panel, creature_banners[s_creature], "creature (first press)");
+    }
 }
 
 static void send_accel(int16_t x, int16_t y, int16_t z) {
@@ -151,6 +196,49 @@ static void send_accel(int16_t x, int16_t y, int16_t z) {
     }
 }
 
+static void send_hello(void) {
+    espnow_hello_msg_t msg = {
+        .magic = ESPNOW_MAGIC_HELLO,
+        .seq = ++s_hello_seq,
+    };
+    esp_err_t err = esp_now_send(BROADCAST_ADDR, (const uint8_t *)&msg, sizeof(msg));
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "sent hello (seq %u, assigned=%d joined=%d)", msg.seq, s_assigned, s_joined);
+    } else {
+        ESP_LOGW(TAG, "esp_now_send failed for hello: %s", esp_err_to_name(err));
+    }
+}
+
+// Unicast from the gateway. Runs in the ESP-NOW/WiFi task, not the button
+// poll loop - s_assigned/s_creature/s_redraw_pending are single bytes so
+// plain reads/writes are enough to hand the value across without a lock.
+// The actual redraw happens in the poll loop: it's ~15 blocking SPI waits,
+// and ESP-IDF warns against lengthy work in this callback.
+static void onEspNowRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+    (void)info;
+    if (len != (int)sizeof(espnow_assign_msg_t)) return;
+    const espnow_assign_msg_t *msg = (const espnow_assign_msg_t *)data;
+    if (msg->magic != ESPNOW_MAGIC_ASSIGN) return;
+    // Channel 1 carries other badges' broadcasts too; a 2-byte payload that
+    // happens to start with 0xB4 parses as ASSIGN regardless of its origin,
+    // so creature is untrusted and must be range-checked before it indexes
+    // creature_banners[] - an out-of-range value there reads a garbage
+    // pointer and crashes on the next redraw.
+    if (msg->creature >= 4) {
+        ESP_LOGW(TAG, "ignoring ASSIGN with out-of-range creature %u", msg->creature);
+        return;
+    }
+
+    ESP_LOGI(TAG, "ASSIGN recv: creature=%u (was assigned=%d joined=%d)", msg->creature, s_assigned, s_joined);
+    s_creature = msg->creature;
+    s_assigned = true;
+    // A reassign after this badge already joined (a manual swap mid-game)
+    // shows the new creature directly; otherwise it's still waiting on a
+    // first press, so "press any key to join" stands until that happens.
+    s_pending_banner = s_joined ? creature_banners[msg->creature] : system_press_to_join_banner;
+    s_redraw_pending = true;
+}
+
 static void espnow_init(void) {
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
@@ -162,8 +250,15 @@ static void espnow_init(void) {
     ESP_ERROR_CHECK(esp_wifi_start());
     ESP_ERROR_CHECK(esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE));
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+    // Full TX power (20dBm default) draws a PA current spike on every send
+    // that a battery's higher source impedance can sag under - the brownout
+    // detector is already at its least-sensitive Kconfig setting (2.51V), so
+    // the fix is cutting the spike itself, not the threshold. 11dBm is
+    // still comfortable for a badge-to-gateway link at a few meters.
+    ESP_ERROR_CHECK(esp_wifi_set_max_tx_power(44));
 
     ESP_ERROR_CHECK(esp_now_init());
+    ESP_ERROR_CHECK(esp_now_register_recv_cb(onEspNowRecv));
 
     esp_now_peer_info_t peer = {0};
     memcpy(peer.peer_addr, BROADCAST_ADDR, 6);
@@ -187,8 +282,8 @@ void app_main(void) {
         ESP_LOGW(TAG, "accelerometer init failed - continuing without it");
     }
 
-    esp_lcd_panel_handle_t panel = lcd_init();
-    lcd_draw_image(panel);
+    s_panel = lcd_init();
+    lcd_draw_banner(s_panel, system_bingbong_banner, "bingbong (boot)");
 
     bool raw[8], stable[8], last_raw[8];
     hc165_read(stable);
@@ -198,6 +293,7 @@ void app_main(void) {
     bool start_last_raw = start_stable;
 
     ESP_LOGI(TAG, "Button poll loop starting.");
+    send_hello();
 
     uint32_t loop_count = 0;
 
@@ -225,13 +321,30 @@ void app_main(void) {
         }
         start_last_raw = start_raw;
 
-        loop_count++;
-        if (loop_count % ACCEL_SAMPLE_EVERY_N_LOOPS == 0) {
-            int16_t x, y, z;
-            if (accel_read(&x, &y, &z)) {
-                send_accel(x, y, z);
+        if (s_redraw_pending) {
+            s_redraw_pending = false;
+            const uint8_t *banner = (const uint8_t *)s_pending_banner;
+            char label[32];
+            if (banner == system_press_to_join_banner) {
+                snprintf(label, sizeof(label), "press-to-join");
+            } else {
+                snprintf(label, sizeof(label), "creature %u (reassign)", s_creature);
             }
+            lcd_draw_banner(s_panel, banner, label);
         }
+
+        loop_count++;
+        if (!s_assigned && loop_count % HELLO_RETRY_LOOPS == 0) {
+            send_hello();
+        }
+
+        // Paused: accel broadcasts were rate-limiting ESP-NOW.
+        // if (loop_count % ACCEL_SAMPLE_EVERY_N_LOOPS == 0) {
+        //     int16_t x, y, z;
+        //     if (accel_read(&x, &y, &z)) {
+        //         send_accel(x, y, z);
+        //     }
+        // }
 
         vTaskDelay(pdMS_TO_TICKS(10));
     }
