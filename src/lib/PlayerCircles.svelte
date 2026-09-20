@@ -9,6 +9,8 @@
 	import gooseBing from '$lib/images/goose-bing.webp';
 	import ostridge from '$lib/images/ostridge.webp';
 	import ostridgeBing from '$lib/images/ostridge-bing.webp';
+	import PlayerLanes from '$lib/rhythm/PlayerLanes.svelte';
+	import { devInput } from '$lib/dev-input.svelte';
 
 	// Fixed per slot, forever - a slot's name, sprite and creature never
 	// change no matter who connects or disconnects (see handleHello in
@@ -30,6 +32,31 @@
 
 	let nameEls: (HTMLElement | undefined)[] = $state([]);
 	let nameTweens: (gsap.core.Tween | undefined)[] = [];
+
+	let scoreEls: (HTMLElement | undefined)[] = $state([]);
+	let prevScores = [0, 0, 0, 0];
+
+	// White at 0, fully yellow by SCORE_COLOR_CAP - a running sense of
+	// progress independent of the per-hit pop below.
+	const SCORE_COLOR_CAP = 2000;
+	const WHITE = [255, 255, 255];
+	const YELLOW = [229, 200, 93]; // #E5C85D - keep in sync with --color-yellow in layout.css
+	function scoreColor(score: number) {
+		const t = Math.min(1, score / SCORE_COLOR_CAP);
+		const [r, g, b] = WHITE.map((from, i) => Math.round(from + (YELLOW[i] - from) * t));
+		return `rgb(${r}, ${g}, ${b})`;
+	}
+
+	$effect(() => {
+		for (let i = 0; i < PLAYER_COLORS.length; i++) {
+			const score = gameState.scores.get(i + 1) ?? 0;
+			const el = scoreEls[i];
+			if (score > prevScores[i] && el) {
+				gsap.fromTo(el, { scale: 1.6 }, { scale: 1, duration: 0.4, ease: 'back.out(3)' });
+			}
+			prevScores[i] = score;
+		}
+	});
 
 	function startWave(i: number) {
 		const el = nameEls[i];
@@ -65,23 +92,31 @@
 	{/each}
 </svelte:head>
 
-<div class="select-none mx-auto w-full h-auto flex items-start justify-center -space-x-4">
+<div
+	class="select-none mx-auto w-full flex justify-center -space-x-4 {gameState.hasStartedPlay
+		? 'h-full items-stretch'
+		: 'h-auto items-start'}"
+>
 	{#each PLAYER_COLORS as _, i (i)}
 		{@const p = gameState.playerStates.get(i + 1)}
 		{@const slot = SLOTS[i]}
+		{@const isDevSelected = import.meta.env.DEV && devInput.selectedPlayer === i + 1}
 		<div
 			class="relative flex w-50 shrink-0 flex-col items-center group lg:w-90 {gameState.hasStartedPlay
-				? '-space-y-6'
+				? '-space-y-8 min-h-0'
 				: '-space-y-2'}"
 			style="z-index: {PLAYER_COLORS.length - i}"
 			role="group"
 			onmouseenter={() => startWave(i)}
 			onmouseleave={() => stopWave(i)}
 		>
+			{#if gameState.hasStartedPlay}
+				<PlayerLanes player={i + 1} />
+			{/if}
 			<div
 				class="flex items-center justify-center overflow-hidden rounded-full transition-transform duration-150 {big
 					? 'h-50 w-50 lg:h-90 lg:w-90'
-					: 'h-50 w-50 lg:h-90 lg:w-90'} {p?.flash ? 'scale-110' : 'scale-100'} {p ? '' : 'grayscale group-hover:grayscale-0  group-hover:scale-110 p-2 group-hover:-translate-y-6'}"
+					: 'h-50 w-50 lg:h-90 lg:w-90'} {p?.flash ? 'scale-110' : 'scale-100'} {p || isDevSelected ? '' : 'grayscale group-hover:grayscale-0  group-hover:scale-110 p-2 group-hover:-translate-y-6'}"
 			>
 				<img
 					src={p?.flash ? slot.bing : slot.normal}
@@ -89,14 +124,26 @@
 					class="h-full w-full object-cover  group-hover:scale-116"
 				/>
 			</div>
-			<p
-				bind:this={nameEls[i]}
-				class="text-center text-lg xl:text-2xl origin-center transition-transform duration-150 group-hover:scale-125 group-hover:text-shadow-sm font-cloud text-white/40 group-hover:text-white"
-			>
-				{#each slot.name as char, ci (ci)}
-					<span class="letter inline-block">{char}</span>
-				{/each}
-			</p>
+			<div class="flex flex-col items-center">
+				<p
+					bind:this={nameEls[i]}
+					class="text-center text-lg xl:text-2xl origin-center transition-transform duration-150 group-hover:scale-125 group-hover:text-shadow-sm font-cloud text-white/40 group-hover:text-white"
+				>
+					{#each slot.name as char, ci (ci)}
+						<span class="letter inline-block">{char}</span>
+					{/each}
+				</p>
+				{#if gameState.hasStartedPlay}
+					{@const score = gameState.scores.get(i + 1) ?? 0}
+					<p
+						bind:this={scoreEls[i]}
+						class="text-center text-2xl xl:text-4xl font-cloud text-shadow-gray-800 text-shadow-xs"
+						style="color: {scoreColor(score)}"
+					>
+						{score}
+					</p>
+				{/if}
+			</div>
 		</div>
 	{/each}
 </div>

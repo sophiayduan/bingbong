@@ -9,6 +9,8 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { gsap } from 'gsap';
 	import { gameState, supported } from '$lib/game-state.svelte';
+	import Countdown from '$lib/Countdown.svelte';
+	import DevKeyboardInput from '$lib/DevKeyboardInput.svelte';
 
 	let { children } = $props();
 
@@ -116,12 +118,12 @@
 	</p>
 
 	{#if !supported}
-		<p class="max-w-md text-center text-amber-400">
+		<p class="max-w-md text-center text-yellow">
 			Web Serial isn't available in this browser. Use Chrome or Edge on desktop, served over
 			http://localhost or https://.
 		</p>
 	{:else}
-		<div class="group absolute top-8 left-8 flex h-fit w-fit items-center">
+		<div class="group absolute top-6 left-8 flex h-fit w-fit items-center">
 			{#if gameState.status !== 'connected'}
 				<svg
 					viewBox="0 0 24 24"
@@ -197,3 +199,8 @@
 		{@render children()}
 	{/if}
 </main>
+
+<Countdown />
+{#if import.meta.env.DEV}
+	<DevKeyboardInput />
+{/if}

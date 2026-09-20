@@ -8,6 +8,12 @@
     --color-green: #7cc47a;
     --color-brown: #ad855b;
     --color-dark-blue: #3f64dc;
+    --color-light-blue: #6284F2;
+    --color-purple: #B791CF;
+    --color-pink: #E8BCB7;
+    --color-yellow: #E5C85D;
+    --color-orange: #ec9320;
+    --color-light-brown: #7B6549;
     
 }
 @font-face {
@@ -15,6 +21,13 @@
     src: url('$lib/fonts/Cloudy.ttf') format('truetype');
     font-style: normal;
     font-display: swap;
+}
+
+html,
+body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
 }
 
 body {

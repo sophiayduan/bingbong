@@ -1,4 +1,5 @@
 import { goto } from '$app/navigation';
+import { rhythmGame } from './rhythm/rhythm-state.svelte';
 
 // Espressif's USB vendor ID - the XIAO's native USB-JTAG/serial port
 // enumerates under this, so the picker only shows relevant devices.
@@ -81,6 +82,10 @@ class GameState {
 	// Separate from playerStates because a badge gets this the instant it
 	// HELLOs, before anyone's pressed a button.
 	creatureByMac = $state<Map<string, number>>(new Map());
+	// player -> total score. Only ever goes up: misses simply award nothing,
+	// there's no penalty, so a player's score is a running record of their
+	// best hits rather than something a bad run can knock back down.
+	scores = $state<Map<number, number>>(new Map());
 
 	hasStartedPlay = $state(false);
 	// Increments on every NEXT line (the D7 local switch). +page.svelte
@@ -101,6 +106,10 @@ class GameState {
 	private static readonly MAX_VOLUME = 2;
 	private static readonly VOLUME_HIDE_AFTER_MS = 1200;
 	private volumeHideTimeout: ReturnType<typeof setTimeout> | undefined;
+	// True only for the "3, 2, 1, go" beat between entering game mode and
+	// notes actually being live - button presses are ignored while this is
+	// true so an early mash can't score before anything's actually falling.
+	countingDown = $state(false);
 	private port: SerialPort | null = null;
 	private reader: ReadableStreamDefaultReader<string> | null = null;
 	private readableClosed: Promise<void> | null = null;
@@ -116,7 +125,7 @@ class GameState {
 	private lastSeenByMac = new Map<string, number>();
 	private livenessInterval: ReturnType<typeof setInterval> | undefined;
 
-	private playTone(freq: number) {
+	private playTone(freq: number, duration = 0.4) {
 		if (!this.audioCtx) return;
 		const osc = this.audioCtx.createOscillator();
 		const gain = this.audioCtx.createGain();
@@ -129,11 +138,30 @@ class GameState {
 		const peak = Math.max(0.3 * this.volume, 0.0001);
 		gain.gain.setValueAtTime(0, now);
 		gain.gain.linearRampToValueAtTime(peak, now + 0.01);
-		gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.4);
+		gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
 
 		osc.connect(gain).connect(this.audioCtx.destination);
 		osc.start(now);
-		osc.stop(now + 0.4);
+		osc.stop(now + duration);
+	}
+
+	// Seconds on the same clock chart note times and press timestamps are
+	// measured against - see rhythm/rhythm-state.svelte.ts. Lazily creates
+	// the AudioContext so this works even before/without connect() (e.g.
+	// the dev Next button or keyboard input, with no badge ever attached).
+	now(): number {
+		if (!this.audioCtx) this.audioCtx = new AudioContext();
+		return this.audioCtx.currentTime;
+	}
+
+	playCountdownTick() {
+		this.playTone(660, 0.15);
+	}
+
+	// A brighter triad instead of another single blip, so GO reads as a
+	// distinct "the game just started" beat rather than one more tick.
+	playGoSound() {
+		[523.25, 659.25, 783.99].forEach((freq) => this.playTone(freq, 0.5));
 	}
 
 	private playerFor(mac: string): number {
@@ -203,6 +231,28 @@ class GameState {
 		goto('/');
 	}
 
+	// Guarded so the countdown can only ever be kicked off once per session -
+	// without this, the auto-start-at-4-players check and a manual Next
+	// click could theoretically both fire it (e.g. the 4th player joins the
+	// instant the button's clicked) and restart the sequence mid-count.
+	startCountdown() {
+		if (this.countingDown) return;
+		this.countingDown = true;
+	}
+
+	endCountdown() {
+		this.countingDown = false;
+	}
+
+	// Awards points for a hit's timing accuracy; call with 0 (or don't call at
+	// all) on a miss. Negative/zero points are ignored so score can't go down.
+	awardPoints(player: number, points: number) {
+		if (points <= 0) return;
+		const next = new Map(this.scores);
+		next.set(player, (next.get(player) ?? 0) + points);
+		this.scores = next;
+	}
+
 	// Gateway prints one of:
 	//   "EVT,<mac>,<button>,<seq>", e.g. "EVT,AA:BB:CC:DD:EE:FF,A,12"
 	//   "ACC,<mac>,<x>,<y>,<z>,<seq>", e.g. "ACC,AA:BB:CC:DD:EE:FF,120,-38,16200,412"
@@ -254,10 +304,29 @@ class GameState {
 		const [mac, button] = parts;
 		if (!mac || !button) return;
 		this.touchSeen(mac);
+		this.registerButtonPress(mac, this.playerFor(mac), button, this.creatureByMac.get(mac));
+	}
+
+	// Dev-only stand-in for a real badge press (keyboard input, no hardware
+	// attached) - see DevKeyboardInput.svelte. Goes straight to a chosen
+	// player slot instead of resolving one from a mac address.
+	simulateButtonPress(player: number, button: string) {
+		const creature = player - 1 < CREATURES.length ? player - 1 : undefined;
+		this.registerButtonPress(`KEYBOARD:${player}`, player, button, creature);
+	}
+
+	private registerButtonPress(
+		mac: string,
+		player: number,
+		button: string,
+		creature: number | undefined
+	) {
+		// Ignore presses entirely during the pre-game countdown - no tone, no
+		// flash, no scoring, so an early mash can't sneak in before play starts.
+		if (this.countingDown) return;
 
 		// Button picks the scale degree as always; creature (if assigned yet)
 		// shifts that note's register up/down to its own "call".
-		const creature = this.creatureByMac.get(mac);
 		const { note, freq } = noteForButton(button);
 		const pitch = creature !== undefined ? freq * CREATURES[creature].pitchMultiplier : freq;
 
@@ -267,16 +336,29 @@ class GameState {
 			button,
 			note,
 			creature,
-			player: this.playerFor(mac),
+			player,
 			time: new Date().toLocaleTimeString()
 		};
 
 		this.events = [entry, ...this.events].slice(0, 50);
 		this.playTone(pitch);
 
+		if (this.hasStartedPlay) {
+			rhythmGame.tryHit(entry.player, button, this.now());
+		}
+
 		const next = new Map(this.playerStates);
 		next.set(entry.player, { ...entry, flash: true });
 		this.playerStates = next;
+
+		// Auto-start once every slot has thrown at least one press - no need
+		// to wait on the Next button if the whole table's already playing.
+		// There's no click to hang a move-animation off here, so this skips
+		// straight to the countdown instead of the Next button's FLIP tween.
+		if (!this.hasStartedPlay && this.playerStates.size >= CREATURES.length) {
+			this.goToPlay();
+			this.startCountdown();
+		}
 
 		clearTimeout(this.flashTimeouts.get(entry.player));
 		this.flashTimeouts.set(
@@ -372,8 +454,11 @@ class GameState {
 			this.playerStates = new Map();
 			this.creatureByMac = new Map();
 			this.events = [];
+			this.scores = new Map();
 			this.hasStartedPlay = false;
 			this.gooseMode = false;
+			this.countingDown = false;
+			rhythmGame.stop();
 			goto('/');
 
 			clearInterval(this.livenessInterval);
