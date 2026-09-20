@@ -28,3 +28,6 @@ firmware/badge_espnow_firmware/sdkconfig
 
 # arduino-cli (firmware/xiao_espnow_gateway)
 firmware/xiao_espnow_gateway/build
+
+# Backups
+badge-backups/
