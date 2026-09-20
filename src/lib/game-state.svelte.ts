@@ -134,6 +134,12 @@ class GameState {
 	private playerByMac = new Map<string, number>();
 	private nextEventId = 0;
 	private flashTimeouts = new Map<number, ReturnType<typeof setTimeout>>();
+	// A mid-round flash (see registerButtonPress) is just a quick tap glow,
+	// but a press on the results screen swaps all the way to the emote
+	// sprite - that reads better held for a beat rather than a blink, so it
+	// gets its own much longer duration.
+	private static readonly FLASH_MS = 200;
+	private static readonly RESULTS_EMOTE_FLASH_MS = 3000;
 	private audioCtx: AudioContext | null = null;
 	// Badges ping every ~1s even when idle (see main.c), so anything quiet
 	// for longer than this has gone out of range or lost power.
@@ -788,12 +794,15 @@ class GameState {
 		clearTimeout(this.flashTimeouts.get(entry.player));
 		this.flashTimeouts.set(
 			entry.player,
-			setTimeout(() => {
-				const cleared = new Map(this.playerStates);
-				const state = cleared.get(entry.player);
-				if (state) cleared.set(entry.player, { ...state, flash: false });
-				this.playerStates = cleared;
-			}, 200)
+			setTimeout(
+				() => {
+					const cleared = new Map(this.playerStates);
+					const state = cleared.get(entry.player);
+					if (state) cleared.set(entry.player, { ...state, flash: false });
+					this.playerStates = cleared;
+				},
+				this.matchOver ? GameState.RESULTS_EMOTE_FLASH_MS : GameState.FLASH_MS
+			)
 		);
 	}
 
