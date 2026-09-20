@@ -25,6 +25,7 @@
 #include "driver/gpio.h"
 #include "accel.h"
 #include "lcd.h"
+#include "led.h"
 #include "creature_banners.h"
 
 static const char *TAG = "badge_espnow";
@@ -115,6 +116,7 @@ static uint16_t s_accel_seq = 0;
 static uint16_t s_hello_seq = 0;
 
 static esp_lcd_panel_handle_t s_panel;
+static led_strip_handle_t s_led_strip;
 static volatile bool s_assigned = false;
 // Set the instant a button on THIS badge is pressed, entirely locally - no
 // server round trip needed, unlike s_assigned. Read from onEspNowRecv (the
@@ -192,6 +194,7 @@ static void send_button(button_id_t id) {
     if (s_assigned && !s_joined) {
         s_joined = true;
         lcd_draw_creature_screen(s_panel, s_creature);
+        led_flash_creature(s_led_strip, s_creature);
     }
 }
 
@@ -304,6 +307,7 @@ void app_main(void) {
 
     s_panel = lcd_init();
     lcd_draw_banner(s_panel, system_bingbong_banner, "bingbong (boot)");
+    s_led_strip = led_init();
 
     bool raw[8], stable[8], last_raw[8];
     hc165_read(stable);
