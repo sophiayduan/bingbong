@@ -72,7 +72,7 @@
 
 <div class="relative flex h-full items-end justify-center">
 	{#each COLUMNS as col (col.key)}
-		<div class="relative h-full w-20 lg:w-28">
+		<div class="relative h-full w-20 lg:w-28 border-2 border-black" style={col.key === 'ab' ? 'border-left: 0px' : ''}>
 			{#each rhythmGame.notesFor(player, col.key) as n (n.id)}
 				{@const isMiss = n.resolved === 'miss'}
 				{@const isHit = n.resolved === 'perfect' || n.resolved === 'good'}

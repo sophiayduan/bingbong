@@ -196,22 +196,32 @@
 <div class="select-none mx-auto flex w-full flex-col important {gameState.hasStartedPlay ? 'h-full' : 'h-auto'}">
 	{#if gameState.hasStartedPlay}
 		<div
-			class="relative flex w-full flex-1 min-h-0 justify-center -space-x-4"
+			class="relative flex w-full flex-1 min-h-0 justify-center"
 			bind:clientHeight={laneHeightPx}
 		>
 			<!-- Drawn before the note columns below so it stays behind them in
 			     the stacking order - a falling note should read as passing in
 			     front of the bar, not sliding underneath it. -->
 			<div
-				class="pointer-events-none absolute inset-x-0"
-				style="bottom: {HIT_LINE_INSET_PX}px; height: {barHeightPx}px; background: color-mix(in srgb, var(--color-dark-blue) 35%, transparent); border-top: 3px solid var(--color-dark-blue); border-bottom: 3px solid var(--color-dark-blue);"
+				class="pointer-events-none absolute -inset-x-14"
+				style="bottom: {HIT_LINE_INSET_PX}px; height: {barHeightPx}px; background: color-mix(in srgb, var(--color-dark-blue) 35%, transparent); border-top: 3px solid var(--color-dark-blue); border-bottom: 3px solid var(--color-dark-blue); mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent); -webkit-mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent);"
 			></div>
 
-			{#each PLAYER_COLORS as _, i (i)}
-				<div class="relative flex h-full w-50 shrink-0 lg:w-90">
-					<PlayerLanes player={i + 1} {laneHeightPx} {barHeightPx} />
-				</div>
-			{/each}
+			<!-- Own flex wrapper so -space-x-4 only ever sees the 4 lane divs
+			     as siblings - the hit bar above is a DOM sibling too (even
+			     though it's position:absolute and takes no layout space), and
+			     Tailwind's space-x selector (> * + *) counts DOM order, not
+			     layout participation. Left in the same flow as the hit bar,
+			     player 1's lane was picking up a -space-x-4 margin the
+			     character row below never applies to player 1, pushing every
+			     lane out of alignment with its own character. -->
+			<div class="relative flex h-full justify-center -space-x-4">
+				{#each PLAYER_COLORS as _, i (i)}
+					<div class="relative flex h-full w-50 shrink-0 justify-center lg:w-90">
+						<PlayerLanes player={i + 1} {laneHeightPx} {barHeightPx} />
+					</div>
+				{/each}
+			</div>
 		</div>
 	{/if}
 
