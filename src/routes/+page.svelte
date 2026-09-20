@@ -1,20 +1,37 @@
 <script lang="ts">
-	import { gameState, MAX_PLAYERS } from '$lib/game-state.svelte';
+	import { gameState, colorFor } from '$lib/game-state.svelte';
 	import PlayerCircles from '$lib/PlayerCircles.svelte';
 </script>
+<div class="mt-20 lg:mt-30">
+<PlayerCircles big={true} />
 
-<div class="flex flex-col items-center gap-2 text-center">
-	<p class="text-xl font-semibold text-white">Press any button on your device to join!</p>
-	<p class="text-sm text-slate-500">
-		{gameState.playerStates.size}/{MAX_PLAYERS} joined · starting in {gameState.secondsLeft}s
-	</p>
 </div>
 
-<PlayerCircles big={false} />
+{#if gameState.latestAccel}
+	<div class="w-full max-w-md rounded px-3 py-2">
+		<span class="flex items-center gap-2">
+			<span class="h-2 w-2 rounded-full {colorFor(gameState.latestAccel.player)}"></span>
+			Player {gameState.latestAccel.player} accel · x {gameState.latestAccel.x} · y {gameState
+				.latestAccel.y} · z {gameState.latestAccel.z}
+			<span class="ml-auto text-slate-500">{gameState.latestAccel.time}</span>
+		</span>
+	</div>
+{/if}
 
-<button
-	onclick={() => gameState.goToPlay()}
-	class="rounded-sm bg-emerald-500 px-5 py-2.5 font-medium text-white transition hover:bg-emerald-400"
->
-	Next →
-</button>
+<!-- <div class="w-full max-w-md">
+	<h2 class="mb-2 text-sm font-semibold tracking-wide text-slate-500 uppercase">Recent presses</h2>
+	<ul class="flex flex-col gap-1">
+		{#each gameState.events as e (e.id)}
+			<li class="flex items-center justify-between rounded bg-slate-900 px-3 py-2 text-sm">
+				<span class="flex items-center gap-2">
+					<span class="h-2 w-2 rounded-full {colorFor(e.player)}"></span>
+					Player {e.player} pressed <strong>{e.button}</strong> → {e.note}
+				</span>
+				<span class="text-slate-500">{e.time}</span>
+			</li>
+		{/each}
+		{#if gameState.events.length === 0}
+			<li class="text-sm text-slate-600">No presses yet.</li>
+		{/if}
+	</ul>
+</div> -->

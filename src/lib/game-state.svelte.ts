@@ -118,7 +118,7 @@ class GameState {
 		clearInterval(this.countdownInterval);
 		this.countdownInterval = undefined;
 		this.hasStartedPlay = true;
-		goto('/play');
+		goto('/');
 	}
 
 	// Gateway prints one of:

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import './layout.css';
 	import favicon from '$lib/assets/favicon.svg';
+	import background from '$lib/images/background.webp';
 	import { onMount, onDestroy } from 'svelte';
 	import { gsap } from 'gsap';
 	import { gameState, supported } from '$lib/game-state.svelte';
@@ -34,8 +35,13 @@
 
 <svelte:head><link rel="icon" href={favicon} /></svelte:head>
 
-<main class="relative flex min-h-screen flex-col items-center justify-center gap-8 p-8 bg-blue-300">
-	<h1 bind:this={titleEl} class="text-8xl font-bold font-cloud text-gray-100/40">
+<div
+	class="absolute inset-0 -z-10 bg-cover bg-center bg-no-repeat"
+	style="background-image: url({background});"
+></div>
+
+<main class="relative flex min-h-screen flex-col items-center justify-center gap-8 p-8">
+	<h1 bind:this={titleEl} class="text-8xl lg:text-9xl font-bold font-cloud text-white mt-20 text-shadow-gray-400 text-shadow-xs">
 		{#each TITLE as char, i (i)}
 			<span class="letter inline-block">{char === ' ' ? ' ' : char}</span>
 		{/each}
@@ -47,7 +53,7 @@
 			http://localhost or https://.
 		</p>
 	{:else}
-		<div class="absolute w-fit h-fit top-8 left-8 flex items-center gap-3">
+		<div class="opacity-0 hover:opacity-100 absolute w-fit h-fit top-8 left-8 flex items-center gap-3">
 			{#if gameState.status === 'connected'}
 				<button
 					onclick={() => gameState.disconnect()}
@@ -59,17 +65,17 @@
 				<button
 					onclick={() => gameState.connect()}
 					disabled={gameState.status === 'connecting'}
-					class="rounded-lg bg-sky-500 px-5 py-2.5 font-medium text-white transition hover:bg-sky-400 disabled:opacity-50"
+					class="rounded-lg bg-sky-500 px-5 py-2.5 font-semibold text-white transition hover:bg-sky-400 disabled:opacity-50"
 				>
-					{gameState.status === 'connecting' ? 'Connecting...' : 'Connect via USB'}
+					{gameState.status === 'connecting' ? 'Connecting...' : 'Connect'}
 				</button>
 			{/if}
 
-			<span class="text-sm">
+			<span class="text-sm opacity-60">
 				{#if gameState.status === 'connected'}
 					Connected
 				{:else if gameState.status === 'disconnected'}
-					Disconnected — click Connect to retry
+					Disconnected
 				{:else if gameState.status === 'error'}
 					{gameState.errorMessage}
 				{:else if gameState.status === 'connecting'}

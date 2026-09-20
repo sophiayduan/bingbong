@@ -5,7 +5,7 @@
     --color-blue: #93e2ff;
     --color-light-green: #9ddba5;
     --color-green: #7cc47a;
-    --color-brown: #ad855b;
+    --color-brown: +#ad855b;
 }
 @font-face {
     font-family: 'Cloud';

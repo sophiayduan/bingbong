@@ -1,27 +1,86 @@
 <script lang="ts">
-	import { gameState, colorFor, PLAYER_COLORS } from '$lib/game-state.svelte';
+	import { gsap } from 'gsap';
+	import { gameState, PLAYER_COLORS } from '$lib/game-state.svelte';
+	import cat from '$lib/images/cat.webp';
+	import catBing from '$lib/images/cat-bing.webp';
+	import chick from '$lib/images/chick.webp';
+	import chickBing from '$lib/images/chick-bing.webp';
+	import goose from '$lib/images/goose.webp';
+	import gooseBing from '$lib/images/goose-bing.webp';
+	import ostridge from '$lib/images/ostridge.webp';
+	import ostridgeBing from '$lib/images/ostridge-bing.webp';
+
+	const ANIMALS = [
+		{ name: 'Bing', normal: cat, bing: catBing },
+		{ name: 'Bong', normal: chick, bing: chickBing },
+		{ name: 'Ping', normal: goose, bing: gooseBing },
+		{ name: 'Pong', normal: ostridge, bing: ostridgeBing }
+	];
 
 	let { big = false }: { big?: boolean } = $props();
+
+	let nameEls: (HTMLElement | undefined)[] = $state([]);
+	let nameTweens: (gsap.core.Tween | undefined)[] = [];
+
+	function startWave(i: number) {
+		const el = nameEls[i];
+		if (!el) return;
+		const letters = el.querySelectorAll('.letter');
+		nameTweens[i]?.kill();
+		nameTweens[i] = gsap.to(letters, {
+			y: -6,
+			duration: 0.5,
+			ease: 'sine.inOut',
+			repeat: -1,
+			yoyo: true,
+			stagger: {
+				each: 0.06,
+				repeat: -1,
+				yoyo: true
+			}
+		});
+	}
+
+	function stopWave(i: number) {
+		nameTweens[i]?.kill();
+		nameTweens[i] = undefined;
+		const el = nameEls[i];
+		if (!el) return;
+		gsap.to(el.querySelectorAll('.letter'), { y: 0, duration: 0.2 });
+	}
 </script>
 
-<div class="mt-autow-full h-auto flex items-start justify-start gap-6">
+<div class="select-none mx-auto w-full h-auto flex items-start justify-center -space-x-4">
 	{#each PLAYER_COLORS as _, i (i)}
 		{@const p = gameState.playerStates.get(i + 1)}
-		<div class="flex flex-col items-center gap-2">
+		{@const animal = ANIMALS[i % ANIMALS.length]}
+		<div
+			class="flex flex-col items-center -space-y-2 group"
+			role="group"
+			onmouseenter={() => startWave(i)}
+			onmouseleave={() => stopWave(i)}
+		>
 			<div
-				class="flex items-center justify-center rounded-full transition-transform duration-150 {big
-					? 'h-36 w-36 text-5xl'
-					: 'h-30 w-30 text-3xl'} {p?.flash ? 'scale-110' : 'scale-100'} {p
-					? colorFor(i + 1)
-					: 'bg-white'}"
+				class=" flex items-center justify-center overflow-hidden rounded-full transition-transform duration-150 {big
+					? 'h-50 w-50 lg:h-90 lg:w-90'
+					: 'h-50 w-50 lg:h-90 lg:w-90'} {p?.flash ? 'scale-110' : 'scale-100'} {p ? '' : 'grayscale group-hover:grayscale-0  group-hover:scale-110 p-2 group-hover:-translate-y-6'}"
 			>
-				{p ? p.note : ''}
+				<img
+					src={p?.flash ? animal.bing : animal.normal}
+					alt=""
+					class="h-full w-full object-cover  group-hover:scale-116"
+				/>
 			</div>
-			<p class="text-center text-sm">
+			<p
+				bind:this={nameEls[i]}
+				class="text-center text-lg xl:text-2xl group-hover:text-shadow-sm group-hover:xl:text-3xl hover:text-3xl font-cloud text-white/40 group-hover:text-white"
+			>
 				{#if p}
 					Player {i + 1} · {big ? `button ${p.button} · ${p.time}` : 'joined'}
 				{:else}
-					open slot
+					{#each animal.name as char, ci (ci)}
+						<span class="letter inline-block">{char}</span>
+					{/each}
 				{/if}
 			</p>
 		</div>
