@@ -2,22 +2,28 @@
 	{
 		"id": "normal",
 		"name": "Normal",
+		"bpm": 90,
+		"durationS": 20,
 		"burstSizes": [3, 3, 6],
 		"cycles": 2,
-		"lastNoteCutoffS": 19.5
+		"richAlternation": false
 	},
 	{
 		"id": "fast",
 		"name": "Fast",
+		"bpm": 120,
+		"durationS": 30,
 		"burstSizes": [3, 3, 10],
-		"cycles": 2,
-		"lastNoteCutoffS": 19.5
+		"cycles": 3,
+		"richAlternation": true
 	},
 	{
 		"id": "faster",
 		"name": "Faster",
+		"bpm": 120,
+		"durationS": 30,
 		"burstSizes": [3, 3, 14],
-		"cycles": 2,
-		"lastNoteCutoffS": 19.5
+		"cycles": 3,
+		"richAlternation": true
 	}
 ]

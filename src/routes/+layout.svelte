@@ -22,8 +22,7 @@
 	const TITLE = 'bing bong';
 	let titleEl: HTMLHeadingElement | undefined = $state();
 
-	const SUBTITLE_LINE_1 = 'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor sit';
-	const SUBTITLE_LINE_2 = 'amet, consectetur adipiscing elit.';
+	const SUBTITLE = 'Connect badge to join rhythm game. Up to 4 players!';
 	let subtitleEl: HTMLParagraphElement | undefined = $state();
 
 	let titleTween: gsap.core.Tween | undefined;
@@ -115,15 +114,11 @@
 
 	<p
 		bind:this={subtitleEl}
-		class="absolute left-1/2 -translate-x-1/2 whitespace-nowrap font-jua text-xl text-white/80 text-center {gameState.hasStartedPlay
+		class="absolute left-1/2 -translate-x-1/2 whitespace-nowrap font-jua text-2xl text-white/80 text-center sm:text-3xl {gameState.hasStartedPlay
 			? 'hidden'
 			: 'top-44 sm:top-64 lg:top-74'}"
 	>
-		{#each SUBTITLE_LINE_1 as char, i (i)}
-			<span class="letter inline-block">{char === ' ' ? ' ' : char}</span>
-		{/each}
-		<br />
-		{#each SUBTITLE_LINE_2 as char, i (i)}
+		{#each SUBTITLE as char, i (i)}
 			<span class="letter inline-block">{char === ' ' ? ' ' : char}</span>
 		{/each}
 	</p>

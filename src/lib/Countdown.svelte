@@ -41,9 +41,10 @@
 		timeline.call(() => {
 			display = 'GO!';
 			gameState.playGoSound();
-			gameState.startBeatLoop();
-			gameState.startMatchTimer();
-			rhythmGame.start(CHARTS_BY_LEVEL[LEVELS[gameState.level - 1].id]);
+			const level = LEVELS[gameState.level - 1];
+			gameState.startBeatLoop(level.bpm);
+			gameState.startMatchTimer(level.durationS);
+			rhythmGame.start(CHARTS_BY_LEVEL[level.id]);
 		});
 		timeline.fromTo(
 			numberEl,

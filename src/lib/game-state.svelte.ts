@@ -111,11 +111,12 @@ class GameState {
 	// notes actually being live - button presses are ignored while this is
 	// true so an early mash can't score before anything's actually falling.
 	countingDown = $state(false);
-	// Seconds left in the match, counting down from MATCH_DURATION_S once GO
-	// fires. null before the match starts / after a fresh connect, so the
-	// on-screen clock only shows up during actual play.
+	// Seconds left in the match, counting down from the current level's
+	// durationS (see LevelConfig.durationS) once GO fires. null before the
+	// match starts / after a fresh connect, so the on-screen clock only
+	// shows up during actual play.
 	matchSecondsRemaining = $state<number | null>(null);
-	private static readonly MATCH_DURATION_S = 20;
+	private static readonly DEFAULT_MATCH_DURATION_S = 20;
 	private matchTimerId: ReturnType<typeof setInterval> | undefined;
 	// 1-indexed - LEVELS[level - 1] in rhythm/levels.ts is the chart currently
 	// (or about to be) playing. Advances via advanceLevel(); back to 1 on a
@@ -140,14 +141,17 @@ class GameState {
 	private lastSeenByMac = new Map<string, number>();
 	private livenessInterval: ReturnType<typeof setInterval> | undefined;
 
-	// Background beat: 90 BPM, 4/4, 16 steps/bar - kick on 1 & 9, snare on
-	// 5 & 13, hi-hat on every odd step (straight 8ths). Decoded from
+	// Background beat: 4/4, 16 steps/bar - kick on 1 & 9, snare on 5 & 13,
+	// hi-hat on every odd step (straight 8ths). Decoded from
 	// https://www.musicca.com/drum-machine#data=90-n-44-a--5acegikmo6em7ai-
 	// (Musicca has no audio export, only URL-encoded patterns, so this is
 	// resynthesized rather than downloaded - it also keeps the beat on the
 	// same procedural-audio approach as every other sound in the game).
-	// Step indices are 0-based here (URL letters a-p are 1-based).
-	private static readonly BEAT_BPM = 90;
+	// Step indices are 0-based here (URL letters a-p are 1-based). The tempo
+	// itself isn't fixed - startBeatLoop takes a bpm (see LevelConfig.bpm in
+	// rhythm/levels.ts) so faster levels speed the music up to match; this
+	// default is only the original/normal-level tempo.
+	private static readonly DEFAULT_BEAT_BPM = 90;
 	private static readonly BEAT_STEPS = 16;
 	private static readonly KICK_STEPS = [0, 8];
 	private static readonly SNARE_STEPS = [4, 12];
@@ -474,11 +478,14 @@ class GameState {
 
 	// Starts the background beat looping indefinitely; call stopBeatLoop() to
 	// end it (there's no fixed length - it just keeps going until stopped).
-	startBeatLoop() {
+	// bpm defaults to the original/normal-level tempo - pass the current
+	// level's own bpm (see LevelConfig.bpm) so faster levels speed the beat
+	// up to match the falling notes' own faster grid.
+	startBeatLoop(bpm: number = GameState.DEFAULT_BEAT_BPM) {
 		this.stopBeatLoop();
 		if (!this.audioCtx) this.audioCtx = new AudioContext();
 
-		const secondsPerStep = 60 / GameState.BEAT_BPM / 4; // 16th notes
+		const secondsPerStep = 60 / bpm / 4; // 16th notes
 		this.beatStepIndex = 0;
 		this.beatNextStepTime = this.audioCtx.currentTime + 0.05;
 
@@ -594,12 +601,13 @@ class GameState {
 		goto('/');
 	}
 
-	// Starts the 20-second match clock - call once, right at GO (see
-	// Countdown.svelte). Ticks once a second; when it reaches 0 the match
-	// ends the same way as the chart simply running out (see endMatch).
-	startMatchTimer() {
+	// Starts the match clock - call once, right at GO (see Countdown.svelte,
+	// which passes the current level's own durationS). Ticks once a second;
+	// when it reaches 0 the match ends the same way as the chart simply
+	// running out (see endMatch).
+	startMatchTimer(durationS: number = GameState.DEFAULT_MATCH_DURATION_S) {
 		this.stopMatchTimer();
-		this.matchSecondsRemaining = GameState.MATCH_DURATION_S;
+		this.matchSecondsRemaining = durationS;
 		this.matchTimerId = setInterval(() => {
 			if (this.matchSecondsRemaining === null) return;
 			this.matchSecondsRemaining = Math.max(0, this.matchSecondsRemaining - 1);
