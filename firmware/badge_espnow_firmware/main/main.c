@@ -129,14 +129,20 @@ typedef enum { REDRAW_NONE = 0, REDRAW_PRESS_TO_JOIN, REDRAW_CREATURE } redraw_k
 static volatile redraw_kind_t s_redraw_kind = REDRAW_NONE;
 static volatile uint8_t s_creature = 0;
 static uint32_t s_loop_count = 0;
-// Loop count of the last thing sent (button or HELLO)
+// Loop count of the last thing sent (button or HELLO) - HELLO only fires once
+// this has gone quiet for IDLE_PING_LOOPS, so it stays pure filler and never
+// adds traffic on top of a badge that's already being used.
 static uint32_t s_last_send_loop = 0;
+// Loop count of the last real button press (not HELLO) - a badge getting
+// mashed is proof enough of a live link on its own (the server's own
+// inactivity timer works the same way: any message resets it, not just
+// HELLO), so the connection check below doesn't need to wait on an ASSIGN
+// reply while this is recent.
+static uint32_t s_last_button_loop = 0;
 // Loop count of the last ASSIGN received (written from onEspNowRecv, read
 // from the poll loop) - a plain uint32_t is fine, same reasoning as the other
-// cross-task fields above. Used to detect the link going quiet, independent
-// of the server's own DISCONNECT_AFTER_MS (see checkLiveness in
-// src/lib/game-state.svelte.ts) since the badge has no way to learn that
-// directly - it can only notice its own pings stopped getting answered.
+// cross-task fields above. This is what catches a genuinely dead link during
+// an idle stretch, when there's no button traffic to lean on instead.
 static volatile uint32_t s_last_assign_recv_loop = 0;
 static bool s_connected = false;
 // 2 missed ~1s idle pings (see IDLE_PING_LOOPS) - enough margin to not
@@ -194,6 +200,7 @@ static void send_button(button_id_t id) {
     if (err == ESP_OK) {
         ESP_LOGI(TAG, "sent button '%c' (seq %u)", msg.button, msg.seq);
         s_last_send_loop = s_loop_count;
+        s_last_button_loop = s_loop_count;
     } else {
         ESP_LOGW(TAG, "esp_now_send failed for '%c': %s", msg.button, esp_err_to_name(err));
     }
@@ -367,10 +374,19 @@ void app_main(void) {
         }
 
         if (s_assigned) {
-            bool link_alive = (s_loop_count - s_last_assign_recv_loop) < CONNECTION_TIMEOUT_LOOPS;
+            bool link_alive = (s_loop_count - s_last_assign_recv_loop) < CONNECTION_TIMEOUT_LOOPS ||
+                              (s_loop_count - s_last_button_loop) < CONNECTION_TIMEOUT_LOOPS;
             if (link_alive != s_connected) {
                 s_connected = link_alive;
                 led_flash_connection(s_led_strip, s_connected);
+                if (!s_connected) {
+                    // Drop back to unassigned/unjoined so a later ASSIGN (even
+                    // for the same creature) is treated as a real change and
+                    // redraws - "changed" in onEspNowRecv checks s_assigned.
+                    s_assigned = false;
+                    s_joined = false;
+                    lcd_draw_banner(s_panel, system_bingbong_banner, "bingbong (boot)");
+                }
             }
         }
 
