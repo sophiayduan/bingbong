@@ -62,14 +62,16 @@
 		{@const p = gameState.playerStates.get(i + 1)}
 		{@const slot = SLOTS[i]}
 		<div
-			class="relative flex w-50 shrink-0 flex-col items-center -space-y-2 group lg:w-90"
+			class="relative flex w-50 shrink-0 flex-col items-center group lg:w-90 {gameState.hasStartedPlay
+				? '-space-y-6'
+				: '-space-y-2'}"
 			style="z-index: {PLAYER_COLORS.length - i}"
 			role="group"
 			onmouseenter={() => startWave(i)}
 			onmouseleave={() => stopWave(i)}
 		>
 			<div
-				class=" flex items-center justify-center overflow-hidden rounded-full transition-transform duration-150 {big
+				class="flex items-center justify-center overflow-hidden rounded-full transition-transform duration-150 {big
 					? 'h-50 w-50 lg:h-90 lg:w-90'
 					: 'h-50 w-50 lg:h-90 lg:w-90'} {p?.flash ? 'scale-110' : 'scale-100'} {p ? '' : 'grayscale group-hover:grayscale-0  group-hover:scale-110 p-2 group-hover:-translate-y-6'}"
 			>
@@ -81,7 +83,7 @@
 			</div>
 			<p
 				bind:this={nameEls[i]}
-				class="text-center text-lg xl:text-2xl group-hover:text-shadow-sm group-hover:xl:text-3xl hover:text-3xl font-cloud text-white/40 group-hover:text-white"
+				class="text-center text-lg xl:text-2xl origin-center transition-transform duration-150 group-hover:scale-125 group-hover:text-shadow-sm font-cloud text-white/40 group-hover:text-white"
 			>
 				{#each slot.name as char, ci (ci)}
 					<span class="letter inline-block">{char}</span>

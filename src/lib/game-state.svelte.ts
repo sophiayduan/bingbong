@@ -64,9 +64,6 @@ export type AccelSample = {
 // instead of the second press silently clobbering the first.
 export type PlayerState = ButtonPress & { flash: boolean };
 
-export const JOIN_SECONDS = 10;
-export const MAX_PLAYERS = PLAYER_COLORS.length;
-
 export const supported = typeof navigator !== 'undefined' && !!navigator.serial;
 
 export function colorFor(player: number) {
@@ -79,13 +76,12 @@ class GameState {
 	events = $state<ButtonPress[]>([]);
 	playerStates = $state<Map<number, PlayerState>>(new Map());
 	latestAccel = $state<AccelSample | null>(null);
-	secondsLeft = $state(JOIN_SECONDS);
 	// mac -> creature id (0-3), always player number - 1 (see handleHello).
 	// Separate from playerStates because a badge gets this the instant it
 	// HELLOs, before anyone's pressed a button.
 	creatureByMac = $state<Map<string, number>>(new Map());
 
-	private hasStartedPlay = false;
+	hasStartedPlay = $state(false);
 	private port: SerialPort | null = null;
 	private reader: ReadableStreamDefaultReader<string> | null = null;
 	private readableClosed: Promise<void> | null = null;
@@ -95,7 +91,6 @@ class GameState {
 	private nextEventId = 0;
 	private flashTimeouts = new Map<number, ReturnType<typeof setTimeout>>();
 	private audioCtx: AudioContext | null = null;
-	private countdownInterval: ReturnType<typeof setInterval> | undefined;
 	// Badges ping every ~3s even when idle (see main.c), so anything quiet
 	// for longer than this has gone out of range or lost power.
 	private static readonly DISCONNECT_AFTER_MS = 5000;
@@ -181,20 +176,7 @@ class GameState {
 		this.sendAssign(mac, creature);
 	}
 
-	startJoinCountdown() {
-		clearInterval(this.countdownInterval);
-		this.secondsLeft = JOIN_SECONDS;
-		this.countdownInterval = setInterval(() => {
-			this.secondsLeft -= 1;
-			if (this.secondsLeft <= 0) {
-				this.goToPlay();
-			}
-		}, 1000);
-	}
-
 	goToPlay() {
-		clearInterval(this.countdownInterval);
-		this.countdownInterval = undefined;
 		this.hasStartedPlay = true;
 		goto('/');
 	}
@@ -243,10 +225,6 @@ class GameState {
 		const next = new Map(this.playerStates);
 		next.set(entry.player, { ...entry, flash: true });
 		this.playerStates = next;
-
-		if (!this.hasStartedPlay && this.playerStates.size >= MAX_PLAYERS) {
-			this.goToPlay();
-		}
 
 		clearTimeout(this.flashTimeouts.get(entry.player));
 		this.flashTimeouts.set(
@@ -344,7 +322,6 @@ class GameState {
 			this.events = [];
 			this.hasStartedPlay = false;
 			goto('/');
-			this.startJoinCountdown();
 
 			clearInterval(this.livenessInterval);
 			this.livenessInterval = setInterval(() => this.checkLiveness(), 1000);
@@ -357,8 +334,6 @@ class GameState {
 	}
 
 	async disconnect() {
-		clearInterval(this.countdownInterval);
-		this.countdownInterval = undefined;
 		clearInterval(this.livenessInterval);
 		this.livenessInterval = undefined;
 		try {

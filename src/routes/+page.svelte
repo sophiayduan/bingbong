@@ -1,11 +1,34 @@
 <script lang="ts">
+	import { tick } from 'svelte';
+	import { gsap } from 'gsap';
 	import { gameState, colorFor } from '$lib/game-state.svelte';
 	import PlayerCircles from '$lib/PlayerCircles.svelte';
+
+	let circlesEl: HTMLDivElement | undefined = $state();
+
+	async function handleNext() {
+		const startRect = circlesEl?.getBoundingClientRect();
+		gameState.goToPlay();
+		await tick();
+		if (!circlesEl || !startRect) return;
+		const endRect = circlesEl.getBoundingClientRect();
+		const deltaY = startRect.top - endRect.top;
+		gsap.fromTo(circlesEl, { y: deltaY }, { y: 0, duration: 1.2, ease: 'power2.inOut' });
+	}
 </script>
-<div class="mt-20 lg:mt-30">
+<div bind:this={circlesEl} class={gameState.hasStartedPlay ? 'mt-auto' : 'mt-30 lg:mt-60'}>
 <PlayerCircles big={true} />
 
 </div>
+
+{#if !gameState.hasStartedPlay}
+	<button
+		onclick={handleNext}
+		class="fixed bottom-6 right-6 rounded-lg bg-dark-blue px-5 py-2 text-2xl font-jua font-semibold text-white shadow-xl transition hover:bg-blue-700/80"
+	>
+		Next
+	</button>
+{/if}
 
 {#if gameState.latestAccel}
 	<div class="w-full max-w-md rounded px-3 py-2">
