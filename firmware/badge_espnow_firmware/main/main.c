@@ -76,8 +76,9 @@ static const char BUTTON_CODE[BTN_COUNT] = {
 // Once assigned, HELLO doubles as a keepalive ping so the server can tell a
 // badge that's gone out of range or lost power from one that's just sitting
 // idle (see checkLiveness in src/lib/game-state.svelte.ts, which disconnects
-// a badge after 5s of silence - well clear of this interval).
-#define IDLE_PING_LOOPS 300
+// a badge after 2.5s of silence - a couple of missed pings' worth of margin
+// clear of this interval).
+#define IDLE_PING_LOOPS 100
 
 // Accelerometer samples are broadcast at 1/ACCEL_SAMPLE_EVERY_N_LOOPS of the
 // button poll rate (10 ms loop -> 50 ms / 20 Hz) so they don't dominate

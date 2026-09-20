@@ -1,0 +1,9 @@
+# Gateway's console is native USB-Serial-JTAG, same as the badges - used
+# bidirectionally here (EVT/ACC/HELLO lines out, ASSIGN lines in from the
+# website over Web Serial), not just for logging.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# Default CRLF output would put a stray \r before every line's newline - the
+# website's line protocol (see main.c's header comment) is plain \n.
+CONFIG_NEWLIB_STDOUT_LINE_ENDING_LF=y

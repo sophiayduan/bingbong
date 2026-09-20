@@ -119,9 +119,9 @@ class GameState {
 	private nextEventId = 0;
 	private flashTimeouts = new Map<number, ReturnType<typeof setTimeout>>();
 	private audioCtx: AudioContext | null = null;
-	// Badges ping every ~3s even when idle (see main.c), so anything quiet
+	// Badges ping every ~1s even when idle (see main.c), so anything quiet
 	// for longer than this has gone out of range or lost power.
-	private static readonly DISCONNECT_AFTER_MS = 5000;
+	private static readonly DISCONNECT_AFTER_MS = 2000;
 	private lastSeenByMac = new Map<string, number>();
 	private livenessInterval: ReturnType<typeof setInterval> | undefined;
 

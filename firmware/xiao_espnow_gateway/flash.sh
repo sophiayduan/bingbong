@@ -3,11 +3,14 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-FQBN="esp32:esp32:XIAO_ESP32C6"
-
-if ! command -v arduino-cli >/dev/null 2>&1; then
-	echo "arduino-cli not found on PATH" >&2
-	exit 1
+IDF_EXPORT="${IDF_EXPORT:-$HOME/esp/esp-idf/export.sh}"
+if ! command -v idf.py >/dev/null 2>&1; then
+	if [ ! -f "$IDF_EXPORT" ]; then
+		echo "idf.py not found and $IDF_EXPORT doesn't exist - set IDF_EXPORT to your esp-idf export.sh" >&2
+		exit 1
+	fi
+	# shellcheck disable=SC1090
+	source "$IDF_EXPORT"
 fi
 
 PORT="${1:-}"
@@ -27,6 +30,10 @@ if [ "$CHIP" != "ESP32-C6" ]; then
 	exit 1
 fi
 
+if [ ! -f sdkconfig ]; then
+	idf.py set-target esp32c6
+fi
+
 echo "flashing gateway on $PORT ($CHIP)"
-arduino-cli compile --fqbn "$FQBN" xiao_espnow_gateway.ino
-arduino-cli upload -p "$PORT" --fqbn "$FQBN" xiao_espnow_gateway.ino
+idf.py build
+idf.py -p "$PORT" flash
