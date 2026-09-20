@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 #include "led_strip.h"
 
@@ -12,3 +13,7 @@ led_strip_handle_t led_init(void);
 // duration of the flash sequence - call from the poll loop, not
 // onEspNowRecv (same reasoning as the screen redraws in lcd.c).
 void led_flash_creature(led_strip_handle_t strip, uint8_t creature);
+
+// Same corners/brightness/timing as led_flash_creature, but green for a
+// (re)connect to the server and red for losing it. Call from the poll loop.
+void led_flash_connection(led_strip_handle_t strip, bool connected);

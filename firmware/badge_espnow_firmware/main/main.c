@@ -131,6 +131,17 @@ static volatile uint8_t s_creature = 0;
 static uint32_t s_loop_count = 0;
 // Loop count of the last thing sent (button or HELLO)
 static uint32_t s_last_send_loop = 0;
+// Loop count of the last ASSIGN received (written from onEspNowRecv, read
+// from the poll loop) - a plain uint32_t is fine, same reasoning as the other
+// cross-task fields above. Used to detect the link going quiet, independent
+// of the server's own DISCONNECT_AFTER_MS (see checkLiveness in
+// src/lib/game-state.svelte.ts) since the badge has no way to learn that
+// directly - it can only notice its own pings stopped getting answered.
+static volatile uint32_t s_last_assign_recv_loop = 0;
+static bool s_connected = false;
+// 2 missed ~1s idle pings (see IDLE_PING_LOOPS) - enough margin to not
+// false-positive on a single dropped packet.
+#define CONNECTION_TIMEOUT_LOOPS (IDLE_PING_LOOPS * 2)
 
 static void hc165_gpio_init(void) {
     gpio_config_t data_cfg = {
@@ -246,6 +257,8 @@ static void onEspNowRecv(const esp_now_recv_info_t *info, const uint8_t *data, i
         return;
     }
 
+    s_last_assign_recv_loop = s_loop_count;
+
     ESP_LOGI(TAG, "ASSIGN recv: creature=%u (was assigned=%d joined=%d)", msg->creature, s_assigned, s_joined);
     // The server resends the same ASSIGN on every idle HELLO ping (every ~3s
     // once assigned - see IDLE_PING_LOOPS), not just on an actual change, so
@@ -350,6 +363,14 @@ void app_main(void) {
                 lcd_draw_banner(s_panel, system_press_to_join_banner, "press-to-join");
             } else {
                 lcd_draw_creature_screen(s_panel, s_creature);
+            }
+        }
+
+        if (s_assigned) {
+            bool link_alive = (s_loop_count - s_last_assign_recv_loop) < CONNECTION_TIMEOUT_LOOPS;
+            if (link_alive != s_connected) {
+                s_connected = link_alive;
+                led_flash_connection(s_led_strip, s_connected);
             }
         }
 

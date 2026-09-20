@@ -39,6 +39,11 @@ static const rgb_t CREATURE_COLORS[4] = {
 #define FLASH_ON_MS 150
 #define FLASH_OFF_MS 150
 
+static const rgb_t CONNECTION_COLORS[2] = {
+    {200, 0, 0},  // lost connection - red
+    {0, 200, 0},  // (re)connected - green
+};
+
 led_strip_handle_t led_init(void) {
     led_strip_config_t strip_config = {
         .strip_gpio_num = LED_GPIO,
@@ -58,9 +63,7 @@ led_strip_handle_t led_init(void) {
     return strip;
 }
 
-void led_flash_creature(led_strip_handle_t strip, uint8_t creature) {
-    if (creature >= 4) return;
-    rgb_t c = CREATURE_COLORS[creature];
+static void flash_rgb(led_strip_handle_t strip, rgb_t c) {
     uint8_t r = (uint8_t)((int)c.r * BRIGHTNESS_NUM / BRIGHTNESS_DEN);
     uint8_t g = (uint8_t)((int)c.g * BRIGHTNESS_NUM / BRIGHTNESS_DEN);
     uint8_t b = (uint8_t)((int)c.b * BRIGHTNESS_NUM / BRIGHTNESS_DEN);
@@ -75,4 +78,13 @@ void led_flash_creature(led_strip_handle_t strip, uint8_t creature) {
         led_strip_clear(strip);
         vTaskDelay(pdMS_TO_TICKS(FLASH_OFF_MS));
     }
+}
+
+void led_flash_creature(led_strip_handle_t strip, uint8_t creature) {
+    if (creature >= 4) return;
+    flash_rgb(strip, CREATURE_COLORS[creature]);
+}
+
+void led_flash_connection(led_strip_handle_t strip, bool connected) {
+    flash_rgb(strip, CONNECTION_COLORS[connected ? 1 : 0]);
 }
