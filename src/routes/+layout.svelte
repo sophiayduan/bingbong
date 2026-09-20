@@ -121,37 +121,50 @@
 			http://localhost or https://.
 		</p>
 	{:else}
-		<div class="opacity-0 hover:opacity-100 absolute w-fit h-fit top-8 left-8 flex items-center gap-3">
-			{#if gameState.status === 'connected'}
-				<button
-					onclick={() => gameState.disconnect()}
-					class="rounded-sm px-5 py-2.5 font-medium text-white transition"
+		<div class="group absolute top-8 left-8 flex h-fit w-fit items-center">
+			{#if gameState.status !== 'connected'}
+				<svg
+					viewBox="0 0 24 24"
+					class="pointer-events-none absolute h-10 w-10 transition-opacity duration-300 group-hover:opacity-0"
 				>
-					Disconnect
-				</button>
-			{:else}
-				<button
-					onclick={() => gameState.connect()}
-					disabled={gameState.status === 'connecting'}
-					class="rounded-lg bg-sky-500 px-5 py-2.5 font-semibold text-white transition hover:bg-sky-400 disabled:opacity-50"
-				>
-					{gameState.status === 'connecting' ? 'Connecting...' : 'Connect'}
-				</button>
+					<circle cx="12" cy="12" r="6.5" fill="none" stroke="#4d6b76" stroke-width="5" />
+				</svg>
 			{/if}
 
-			<span class="text-sm opacity-60">
+			<div
+				class="flex items-center gap-3 opacity-0 transition-opacity duration-300 group-hover:opacity-100"
+			>
 				{#if gameState.status === 'connected'}
-					Connected
-				{:else if gameState.status === 'disconnected'}
-					Disconnected
-				{:else if gameState.status === 'error'}
-					{gameState.errorMessage}
-				{:else if gameState.status === 'connecting'}
-					Waiting for device picker...
+					<button
+						onclick={() => gameState.disconnect()}
+						class="rounded-sm px-5 py-2.5 font-medium text-white transition"
+					>
+						Disconnect
+					</button>
 				{:else}
-					Not connected
+					<button
+						onclick={() => gameState.connect()}
+						disabled={gameState.status === 'connecting'}
+						class="rounded-lg bg-sky-500 px-5 py-2.5 font-semibold text-white transition hover:bg-sky-400 disabled:opacity-50"
+					>
+						{gameState.status === 'connecting' ? 'Connecting...' : 'Connect'}
+					</button>
 				{/if}
-			</span>
+
+				<span class="text-sm opacity-60">
+					{#if gameState.status === 'connected'}
+						Connected
+					{:else if gameState.status === 'disconnected'}
+						Disconnected
+					{:else if gameState.status === 'error'}
+						{gameState.errorMessage}
+					{:else if gameState.status === 'connecting'}
+						Waiting for device picker...
+					{:else}
+						Not connected
+					{/if}
+				</span>
+			</div>
 		</div>
 
 		<div
