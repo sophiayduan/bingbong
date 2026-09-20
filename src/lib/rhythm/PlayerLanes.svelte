@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { rhythmGame, NOTE_TRAVEL_MS, NOTE_LINGER_MS } from './rhythm-state.svelte';
+	import { rhythmGame, NOTE_TRAVEL_MS, NOTE_LINGER_MS, hitLineCenterPx } from './rhythm-state.svelte';
 	import type { Column } from './chart';
 
 	// laneHeightPx and barHeightPx come from the parent (PlayerCircles.svelte),
@@ -21,12 +21,19 @@
 	};
 	const noteColor = $derived(PLAYER_NOTE_COLOR[player] ?? 'var(--color-purple)');
 
+	// A note at progress 1 (the instant it's actually judged) is placed at
+	// the hit bar's vertical center, not the lane's bottom edge - otherwise
+	// a press timed to when the note visually sits inside the bar can land
+	// outside the real timing window and silently do nothing (see
+	// hitLineCenterPx's doc comment).
+	const hitLineTopPx = $derived(hitLineCenterPx(laneHeightPx));
+
 	// arrow.svg points up with no rotation - rotate it clockwise for the
 	// other three directions.
 	const ARROW_ROTATION: Record<string, number> = { U: 0, R: 90, D: 180, L: 270 };
 
-	function progressFor(noteTimeSec: number) {
-		return (rhythmGame.nowMs - (noteTimeSec * 1000 - NOTE_TRAVEL_MS)) / NOTE_TRAVEL_MS;
+	function progressFor(noteTimeSec: number, atMs: number = rhythmGame.nowMs) {
+		return (atMs - (noteTimeSec * 1000 - NOTE_TRAVEL_MS)) / NOTE_TRAVEL_MS;
 	}
 
 	// progress === 1 is the instant a press would be judged "perfect" (see
@@ -67,16 +74,18 @@
 	{#each COLUMNS as col (col.key)}
 		<div class="relative h-full w-20 lg:w-28">
 			{#each rhythmGame.notesFor(player, col.key) as n (n.id)}
-				{@const progress = progressFor(n.time)}
 				{@const isMiss = n.resolved === 'miss'}
 				{@const isHit = n.resolved === 'perfect' || n.resolved === 'good'}
+				{@const progress = isHit
+					? progressFor(n.time, n.resolvedAtMs ?? rhythmGame.nowMs)
+					: progressFor(n.time)}
 				{@const burstScale = n.resolved === 'perfect' ? 1.8 : n.resolved === 'good' ? 1.4 : 1}
 				{@const flashPeak = n.resolved === 'perfect' ? 2.4 : 1.7}
 				<div
 					class="absolute h-14 w-14 transition-[transform,opacity,filter] duration-300 ease-out lg:h-22 lg:w-22 {isMiss
 						? 'grayscale'
 						: ''} {isHit ? 'hit-flash' : ''}"
-					style="top: {topPxFor(progress)}px; left: calc(50% + {wobbleFor(
+					style="top: {progress * hitLineTopPx}px; left: calc(50% + {wobbleFor(
 						n.id,
 						progress
 					)}px); transform: translate(-50%, -50%) scale({burstScale}); opacity: {isMiss

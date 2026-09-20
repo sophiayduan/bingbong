@@ -1,10 +1,35 @@
 import { gameState } from '$lib/game-state.svelte';
 import { columnForButton, type ChartNote, type Column } from './chart';
-import { classify, MISS_WINDOW_MS, POINTS, type Judgment } from './judgment';
+import { classify, MISS_WINDOW_MS, PERFECT_WINDOW_MS, POINTS, type Judgment } from './judgment';
 
 // Fixed fall duration, top of lane to the hit bar - every note gets the
 // same travel time regardless of chart density, so speed reads as constant.
 export const NOTE_TRAVEL_MS = 1500;
+
+// How far the hit bar sits above the very bottom of the lane (see the
+// banner div in PlayerCircles.svelte) - PlayerLanes.svelte scales a note's
+// fall against this same value so it visually lands on the bar instead of
+// overshooting past it.
+export const HIT_LINE_INSET_PX = 40;
+
+// The hit bar's rendered height, in px - sized so it visually spans exactly
+// the PERFECT window (one PERFECT_WINDOW_MS of fall on either side of the
+// actual hit instant). Shared by PlayerCircles.svelte (draws the bar) and
+// hitLineCenterPx below (tells PlayerLanes.svelte where a note should be
+// when it's actually judged) so the two can never drift apart - a press
+// landing inside the visible bar must land inside the real timing window,
+// or hits that look right on screen would silently do nothing.
+export function hitBarHeightPx(laneHeightPx: number) {
+	const pxPerMs = laneHeightPx / NOTE_TRAVEL_MS;
+	return Math.max(10, PERFECT_WINDOW_MS * 2 * pxPerMs);
+}
+
+// Where a note sits (top offset, in px) at the exact instant it's judged -
+// the vertical center of the hit bar, not its near edge, so the whole
+// visible band brackets the real hit window symmetrically.
+export function hitLineCenterPx(laneHeightPx: number) {
+	return laneHeightPx - HIT_LINE_INSET_PX - hitBarHeightPx(laneHeightPx) / 2;
+}
 
 // Every 10-combo raises the multiplier (capped at x4); a miss resets it -
 // this is the only way a miss affects score, since points themselves never
@@ -39,6 +64,10 @@ class RhythmGame {
 	nowMs = $state(0);
 	queues = $state<Map<number, Map<Column, LiveNote[]>>>(new Map());
 	combos = $state<Map<number, number>>(new Map());
+	// Consecutive misses, separate from combo - combo already resets to 0 on
+	// the first miss, so it can't tell "just whiffed one" from "on a bad
+	// streak". Reset by any hit, not just a perfect one (see registerHit).
+	missStreaks = $state<Map<number, number>>(new Map());
 	feedback = $state<Map<number, Feedback>>(new Map());
 
 	private nextNoteId = 0;
@@ -58,6 +87,7 @@ class RhythmGame {
 		}
 		this.queues = queues;
 		this.combos = new Map();
+		this.missStreaks = new Map();
 		this.feedback = new Map();
 		this.tick();
 	}
@@ -119,10 +149,10 @@ class RhythmGame {
 		this.queues = nextQueues;
 
 		if (judgment === 'miss') {
-			this.breakCombo(player);
-			this.showFeedback(player, 'MISS');
+			this.registerMiss(player);
 			return;
 		}
+		this.registerHit(player);
 
 		const combo = (this.combos.get(player) ?? 0) + 1;
 		const nextCombos = new Map(this.combos);
@@ -177,8 +207,7 @@ class RhythmGame {
 					if (n.resolved || this.nowMs - n.time * 1000 <= MISS_WINDOW_MS) return;
 					if (updated === notes) updated = notes.slice();
 					updated[i] = { ...n, resolved: 'miss', resolvedAtMs: this.nowMs };
-					this.breakCombo(player);
-					this.showFeedback(player, 'MISS');
+					this.registerMiss(player);
 				});
 
 				const stillOnScreen = updated.filter((n) => {
@@ -204,6 +233,21 @@ class RhythmGame {
 		const next = new Map(this.combos);
 		next.set(player, 0);
 		this.combos = next;
+	}
+
+	private registerMiss(player: number) {
+		this.breakCombo(player);
+		const next = new Map(this.missStreaks);
+		next.set(player, (next.get(player) ?? 0) + 1);
+		this.missStreaks = next;
+		this.showFeedback(player, 'MISS');
+	}
+
+	private registerHit(player: number) {
+		if ((this.missStreaks.get(player) ?? 0) === 0) return;
+		const next = new Map(this.missStreaks);
+		next.set(player, 0);
+		this.missStreaks = next;
 	}
 
 	private showFeedback(player: number, text: string) {
