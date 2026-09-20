@@ -19,12 +19,12 @@ export function columnForButton(button: string): Column | undefined {
 const ARROW_BUTTONS = ['U', 'D', 'L', 'R'] as const;
 const AB_BUTTONS = ['A', 'B'] as const;
 
-export const DEMO_CHART: ChartNote[] = Array.from({ length: 48 }, (_, i) => {
+export const DEMO_CHART: ChartNote[] = Array.from({ length: 96 }, (_, i) => {
 	const player = (i % 4) + 1;
 	const column: Column = i % 2 === 0 ? 'arrows' : 'ab';
 	const button =
 		column === 'arrows'
 			? ARROW_BUTTONS[Math.floor(i / 2) % ARROW_BUTTONS.length]
 			: AB_BUTTONS[Math.floor(i / 2) % AB_BUTTONS.length];
-	return { time: 2 + i * 0.45, player, button };
+	return { time: 2 + i * 0.4, player, button };
 });

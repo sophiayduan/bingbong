@@ -1,6 +1,6 @@
 import { gameState } from '$lib/game-state.svelte';
 import { columnForButton, type ChartNote, type Column } from './chart';
-import { classify, MISS_WINDOW_MS, POINTS } from './judgment';
+import { classify, MISS_WINDOW_MS, POINTS, type Judgment } from './judgment';
 
 // Fixed fall duration, top of lane to the hit bar - every note gets the
 // same travel time regardless of chart density, so speed reads as constant.
@@ -12,7 +12,20 @@ export const NOTE_TRAVEL_MS = 1500;
 const MAX_MULTIPLIER = 4;
 const COMBO_PER_MULTIPLIER_STEP = 10;
 
-type LiveNote = ChartNote & { id: number };
+// A missed note stays on screen this much longer after MISS_WINDOW_MS so it
+// visually keeps falling - past the hit bar, behind the characters, and
+// off the bottom of the screen (see layout.css's ground layer) - instead of
+// vanishing the instant it's judged. One more full travel time is enough
+// distance to clear the screen at the same fall speed. Exported so
+// PlayerLanes.svelte can fade the note out over the tail end of this same
+// window, timed to finish right as it's actually removed.
+export const NOTE_LINGER_MS = NOTE_TRAVEL_MS;
+// A hit note lingers just this long instead - enough to play its burst
+// animation (see PlayerLanes.svelte) but short enough it reads as "caught",
+// not as still falling. Matches Tailwind's duration-300 utility.
+export const HIT_RESOLVE_MS = 300;
+
+type LiveNote = ChartNote & { id: number; resolved?: Judgment; resolvedAtMs?: number };
 type Feedback = { text: string; id: number };
 
 function emptyColumns(): Map<Column, LiveNote[]> {
@@ -71,7 +84,9 @@ class RhythmGame {
 		let bestIndex = -1;
 		let bestDelta = Infinity;
 		queue.forEach((note, index) => {
-			if (note.button !== button) return;
+			// Already-resolved notes (hit or auto-missed) are just lingering
+			// for their fade/fall-off animation - not eligible to be hit again.
+			if (note.button !== button || note.resolved) return;
 			const delta = pressMs - note.time * 1000;
 			if (Math.abs(delta) < Math.abs(bestDelta)) {
 				bestDelta = delta;
@@ -80,9 +95,20 @@ class RhythmGame {
 		});
 		if (bestIndex === -1 || Math.abs(bestDelta) > MISS_WINDOW_MS) return;
 
-		this.removeNote(player, column, bestIndex);
-
+		// Replaces the note object rather than mutating it in place - it's a
+		// plain object, not a $state itself, so a mutated property is
+		// invisible to the {#each (n.id)} block in PlayerLanes.svelte even
+		// after `queues` is reassigned below. A new object for this id is
+		// what actually makes the resolved state (and its styling) show up.
 		const judgment = classify(bestDelta);
+		const nextQueue = queue.slice();
+		nextQueue[bestIndex] = { ...queue[bestIndex], resolved: judgment, resolvedAtMs: this.nowMs };
+		const nextColumns = new Map(this.queues.get(player));
+		nextColumns.set(column, nextQueue);
+		const nextQueues = new Map(this.queues);
+		nextQueues.set(player, nextColumns);
+		this.queues = nextQueues;
+
 		if (judgment === 'miss') {
 			this.breakCombo(player);
 			this.showFeedback(player, 'MISS');
@@ -107,6 +133,10 @@ class RhythmGame {
 
 	// Notes that fall past the miss window unhit auto-resolve as misses -
 	// this is the only path that breaks combo besides an explicit whiff.
+	// Judging (combo break + feedback) happens once, right at MISS_WINDOW_MS;
+	// actually removing the note from the screen happens separately, later,
+	// so a hit can play its burst and a miss can keep falling out of view
+	// first (see the resolved-based styling in PlayerLanes.svelte).
 	private sweepMisses() {
 		let anyTouched = false;
 		const next = new Map(this.queues);
@@ -114,13 +144,27 @@ class RhythmGame {
 			let playerColumns = columns;
 			let playerTouched = false;
 			for (const [column, notes] of columns) {
-				const stillLive = notes.filter((n) => this.nowMs - n.time * 1000 <= MISS_WINDOW_MS);
-				if (stillLive.length === notes.length) continue;
+				// New note objects, not in-place mutation - same reasoning as
+				// tryHit: a mutated property on the same object reference
+				// never reaches the {#each (n.id)} block in PlayerLanes.svelte.
+				let updated = notes;
+				notes.forEach((n, i) => {
+					if (n.resolved || this.nowMs - n.time * 1000 <= MISS_WINDOW_MS) return;
+					if (updated === notes) updated = notes.slice();
+					updated[i] = { ...n, resolved: 'miss', resolvedAtMs: this.nowMs };
+					this.breakCombo(player);
+					this.showFeedback(player, 'MISS');
+				});
+
+				const stillOnScreen = updated.filter((n) => {
+					if (!n.resolved) return true;
+					const lingerMs = n.resolved === 'miss' ? NOTE_LINGER_MS : HIT_RESOLVE_MS;
+					return this.nowMs - (n.resolvedAtMs ?? 0) <= lingerMs;
+				});
+				if (updated === notes && stillOnScreen.length === notes.length) continue;
 				playerTouched = true;
 				playerColumns = new Map(playerColumns);
-				playerColumns.set(column, stillLive);
-				this.breakCombo(player);
-				this.showFeedback(player, 'MISS');
+				playerColumns.set(column, stillOnScreen);
 			}
 			if (playerTouched) {
 				next.set(player, playerColumns);
@@ -128,19 +172,6 @@ class RhythmGame {
 			}
 		}
 		if (anyTouched) this.queues = next;
-	}
-
-	private removeNote(player: number, column: Column, index: number) {
-		const columns = this.queues.get(player);
-		if (!columns) return;
-		const notes = columns.get(column) ?? [];
-		const nextNotes = notes.slice();
-		nextNotes.splice(index, 1);
-		const nextColumns = new Map(columns);
-		nextColumns.set(column, nextNotes);
-		const nextQueues = new Map(this.queues);
-		nextQueues.set(player, nextColumns);
-		this.queues = nextQueues;
 	}
 
 	private breakCombo(player: number) {

@@ -1,43 +1,21 @@
 <script lang="ts">
-	import { rhythmGame, NOTE_TRAVEL_MS } from './rhythm-state.svelte';
-	import { PERFECT_WINDOW_MS } from './judgment';
+	import { rhythmGame, NOTE_TRAVEL_MS, NOTE_LINGER_MS } from './rhythm-state.svelte';
 	import type { Column } from './chart';
 
-	let { player }: { player: number } = $props();
+	// laneHeightPx comes from the parent (PlayerCircles.svelte), which
+	// measures the shared lanes row once - every player's lane is the same
+	// height, and the hit bar is now one banner drawn there too, not per
+	// player, so there's nothing left for this component to measure itself.
+	let { player, laneHeightPx }: { player: number; laneHeightPx: number } = $props();
 
-	// The lane fills whatever vertical space is free above the character
-	// (see the flex-1 wrapper below) instead of a fixed pixel height, so
-	// notes fall the full distance from the top of the screen down to the
-	// hit bar - measured via bind:clientHeight since the fall-progress math
-	// needs an actual pixel value.
-	let laneHeightPx = $state(220);
-	const pxPerMs = $derived(laneHeightPx / NOTE_TRAVEL_MS);
-	// Bar height mirrors the perfect window's width in time, so "press while
-	// the note is inside the bar" and "press within PERFECT_WINDOW_MS" are
-	// literally the same rule, not two numbers that can drift apart.
-	const barHeightPx = $derived(Math.max(10, PERFECT_WINDOW_MS * 2 * pxPerMs));
-
-	// color-mix() derives the translucent fill straight from the theme token,
-	// so it can't drift out of sync the way a hand-copied rgba() did before.
-	const COLUMNS: { key: Column; bar: string; barBorder: string }[] = [
-		{
-			key: 'arrows',
-			bar: 'color-mix(in srgb, var(--color-light-blue) 35%, transparent)',
-			barBorder: 'var(--color-light-blue)'
-		},
-		{
-			key: 'ab',
-			bar: 'color-mix(in srgb, var(--color-orange) 35%, transparent)',
-			barBorder: 'var(--color-orange)'
-		}
-	];
+	const COLUMNS: { key: Column }[] = [{ key: 'arrows' }, { key: 'ab' }];
 
 	// Notes are colored by character, not by column - see SLOTS in
 	// PlayerCircles.svelte for the same player-number order.
 	const PLAYER_NOTE_COLOR: Record<number, string> = {
 		1: 'var(--color-purple)', // Bing / cat
 		2: 'var(--color-yellow)', // Bong / chicken
-		3: 'var(--color-brown)', // Ping / goose
+		3: 'var(--color-orange)', // Ping / goose
 		4: 'var(--color-pink)' // Pong / ostrich
 	};
 	const noteColor = $derived(PLAYER_NOTE_COLOR[player] ?? 'var(--color-purple)');
@@ -48,6 +26,18 @@
 
 	function progressFor(noteTimeSec: number) {
 		return (rhythmGame.nowMs - (noteTimeSec * 1000 - NOTE_TRAVEL_MS)) / NOTE_TRAVEL_MS;
+	}
+
+	// A missed note stays fully dim while it falls past the bar and the
+	// characters, then fades the rest of the way out over the tail end of
+	// its lingering window, timed to reach 0 right as it's actually removed
+	// (see NOTE_LINGER_MS) - so it never just pops out of existence.
+	const MISS_FADE_START_MS = NOTE_LINGER_MS * 0.55;
+	function missOpacity(resolvedAtMs: number) {
+		const age = rhythmGame.nowMs - resolvedAtMs;
+		if (age <= MISS_FADE_START_MS) return 0.35;
+		const fadeProgress = (age - MISS_FADE_START_MS) / (NOTE_LINGER_MS - MISS_FADE_START_MS);
+		return Math.max(0, 0.35 * (1 - fadeProgress));
 	}
 
 	// Deterministic per-note wobble (seeded by id, not by frame) so a note's
@@ -61,25 +51,25 @@
 	}
 </script>
 
-<div
-	class="relative flex w-full flex-1 min-h-0 items-end justify-center gap-2"
-	bind:clientHeight={laneHeightPx}
->
+<div class="relative flex h-full items-end justify-center">
 	{#each COLUMNS as col (col.key)}
-		<div class="relative h-full w-20 overflow-hidden lg:w-28">
-			<div
-				class="absolute inset-x-0 bottom-0 rounded"
-				style="height: {barHeightPx}px; background: {col.bar}; border-top: 2px solid {col.barBorder}; border-bottom: 2px solid {col.barBorder};"
-			></div>
-
+		<div class="relative h-full w-20 lg:w-28">
 			{#each rhythmGame.notesFor(player, col.key) as n (n.id)}
 				{@const progress = progressFor(n.time)}
+				{@const isMiss = n.resolved === 'miss'}
+				{@const isHit = n.resolved === 'perfect' || n.resolved === 'good'}
+				{@const burstScale = n.resolved === 'perfect' ? 1.8 : n.resolved === 'good' ? 1.4 : 1}
+				{@const flashPeak = n.resolved === 'perfect' ? 2.4 : 1.7}
 				<div
-					class="absolute h-14 w-14 lg:h-22 lg:w-22"
+					class="absolute h-14 w-14 transition-[transform,opacity,filter] duration-300 ease-out lg:h-22 lg:w-22 {isMiss
+						? 'grayscale'
+						: ''} {isHit ? 'hit-flash' : ''}"
 					style="top: {progress * laneHeightPx}px; left: calc(50% + {wobbleFor(
 						n.id,
 						progress
-					)}px); transform: translate(-50%, -50%);"
+					)}px); transform: translate(-50%, -50%) scale({burstScale}); opacity: {isMiss
+						? missOpacity(n.resolvedAtMs ?? 0)
+						: 1}; --flash-peak: {flashPeak};"
 				>
 					<svg viewBox="0 0 75 73" class="absolute inset-0 h-full w-full" xmlns="http://www.w3.org/2000/svg">
 						<circle cx="37.498" cy="36.6211" r="33.5" fill={noteColor} />
@@ -121,3 +111,27 @@
 		</div>
 	{/if}
 </div>
+
+<style>
+	/* A hit needs to read as "caught", not just "shrinking away" - a sharp
+	   brightness spike that immediately decays, layered under the
+	   transform/scale burst set inline above. --flash-peak (set per-note,
+	   higher for perfect) is what makes perfect hits flash brighter than
+	   good ones. Runs as a keyframe animation rather than a transition so it
+	   always starts fresh at full brightness regardless of the note's
+	   previous state. */
+	@keyframes hit-flash {
+		0% {
+			opacity: 1;
+			filter: brightness(var(--flash-peak, 1.7)) saturate(1.4);
+		}
+		100% {
+			opacity: 0;
+			filter: brightness(1);
+		}
+	}
+
+	.hit-flash {
+		animation: hit-flash 300ms ease-out forwards;
+	}
+</style>
