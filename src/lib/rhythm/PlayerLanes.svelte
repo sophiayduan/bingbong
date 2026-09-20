@@ -126,7 +126,8 @@
 
 	{#if rhythmGame.feedback.get(player)}
 		<div
-			class="pointer-events-none absolute -top-2 left-1/2 -translate-x-1/2 -translate-y-full font-jua text-base text-white text-shadow-sm lg:text-xl"
+			class="pointer-events-none absolute left-1/2 -translate-x-1/2 -translate-y-full font-jua text-base text-white text-shadow-sm lg:text-xl"
+			style="top: {hitLineTopPx}px;"
 		>
 			{rhythmGame.feedback.get(player)?.text}
 		</div>
