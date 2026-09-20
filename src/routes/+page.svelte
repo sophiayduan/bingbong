@@ -15,6 +15,16 @@
 		const deltaY = startRect.top - endRect.top;
 		gsap.fromTo(circlesEl, { y: deltaY }, { y: 0, duration: 1.2, ease: 'power2.inOut' });
 	}
+
+	// D7 on the XIAO sends its own NEXT line (see xiao_espnow_gateway.ino) to
+	// trigger this same button, without being able to fire more than once.
+	let lastHandledNext = 0;
+	$effect(() => {
+		if (gameState.nextRequested > lastHandledNext) {
+			lastHandledNext = gameState.nextRequested;
+			if (!gameState.hasStartedPlay) handleNext();
+		}
+	});
 </script>
 <div bind:this={circlesEl} class={gameState.hasStartedPlay ? 'mt-auto' : 'mt-30 lg:mt-60'}>
 <PlayerCircles big={true} />

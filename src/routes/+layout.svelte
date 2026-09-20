@@ -188,6 +188,12 @@
 			<span class="font-jua text-xl text-white">{gameState.volumePercent}%</span>
 		</div>
 
+		{#if gameState.gooseMode}
+			<span class="pointer-events-none absolute bottom-8 left-8 font-jua text-xl text-white">
+				GOOSE MODE ON
+			</span>
+		{/if}
+
 		{@render children()}
 	{/if}
 </main>

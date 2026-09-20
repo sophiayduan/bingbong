@@ -83,6 +83,14 @@ class GameState {
 	creatureByMac = $state<Map<string, number>>(new Map());
 
 	hasStartedPlay = $state(false);
+	// Increments on every NEXT line (the D7 local switch). +page.svelte
+	// watches this to trigger the same handler as clicking the Next button,
+	// since the slide animation needs a DOM ref this class doesn't have.
+	nextRequested = $state(0);
+	// Toggled by the GOOSE line (all 7 local switches on the XIAO held down
+	// at once). Placeholder for a real separate game mode - for now it just
+	// flips a flag the UI can show a banner for.
+	gooseMode = $state(false);
 	// Controlled by the local D1/D10 switches (see VOL lines below). 1 = the
 	// original fixed 0.3 peak gain; displayed to 0-100 via volumePercent.
 	volume = $state(1);
@@ -200,6 +208,8 @@ class GameState {
 	//   "ACC,<mac>,<x>,<y>,<z>,<seq>", e.g. "ACC,AA:BB:CC:DD:EE:FF,120,-38,16200,412"
 	//   "HELLO,<mac>,<seq>", e.g. "HELLO,AA:BB:CC:DD:EE:FF,3"
 	//   "VOL,<UP|DOWN>,<seq>", e.g. "VOL,UP,7" - from the D1/D10 switches
+	//   "NEXT,<seq>", e.g. "NEXT,8" - from the D7 switch specifically
+	//   "GOOSE,<seq>", e.g. "GOOSE,9" - all 7 local switches held at once
 	private handleLine(line: string) {
 		if (line.startsWith('EVT,')) {
 			this.handleButtonLine(line);
@@ -211,6 +221,10 @@ class GameState {
 		} else if (line.startsWith('VOL,')) {
 			const [direction] = line.slice('VOL,'.length).split(',');
 			this.handleVolumeLine(direction);
+		} else if (line.startsWith('NEXT,')) {
+			this.nextRequested++;
+		} else if (line.startsWith('GOOSE,')) {
+			this.gooseMode = !this.gooseMode;
 		}
 	}
 
@@ -359,6 +373,7 @@ class GameState {
 			this.creatureByMac = new Map();
 			this.events = [];
 			this.hasStartedPlay = false;
+			this.gooseMode = false;
 			goto('/');
 
 			clearInterval(this.livenessInterval);

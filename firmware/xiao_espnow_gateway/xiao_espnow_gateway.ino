@@ -10,15 +10,24 @@
 //
 // This stage also reads a set of keyboard switches wired directly to the
 // XIAO's own GPIO pins (each switch: pin <-> GND, using the internal
-// pull-up so a press reads LOW). Each press is reported:
-//   - as an EVT line, exactly like a badge press, for the 5 switches wired
-//     as ordinary player input into the bing bong game (see LOCAL_KEYS);
-//   - as a VOL,UP / VOL,DOWN line for the D1/D10 switches specifically,
-//     wired as dedicated volume controls instead - they never send EVT;
+// pull-up so a press reads LOW). This controller is purely a utility
+// surface (volume, advancing screens, etc.) - it never sends EVT and so
+// can never play a note or occupy a player/creature slot; only real badges
+// do that. Each press is reported:
+//   - as a VOL,UP / VOL,DOWN line for the D1/D10 switches, wired as
+//     dedicated volume controls;
+//   - as a NEXT line for D7, wired as a dedicated "advance the intro
+//     screen" control. Kept as its own line (rather than having the
+//     website react to "any D press") because a badge's own DOWN button
+//     sends letter 'D', and that must not also advance the intro screen;
+//   - D4/D6/D8/D9 are currently unassigned (ACTION_NONE) - reserved for
+//     future minor controls, deliberately not wired to any game input;
 //   - as a separate KEY line naming the raw D-pin number, for every local
-//     switch regardless of its action, read only by the /controller test
-//     page, so wiring can be verified pin-by-pin without it being tangled
-//     up in game/player/volume logic.
+//     switch regardless of its action (including the unassigned ones),
+//     read only by the /controller test page so wiring can be verified
+//     pin-by-pin;
+//   - as a GOOSE line (a toggle, not an on/off state) whenever all 7 local
+//     switches are held down at once.
 // Note: the ESP32-C6's USB port is a fixed-function USB-Serial/JTAG
 // controller (SOC_USB_SERIAL_JTAG_SUPPORTED), not a full USB-OTG peripheral
 // like the S2/S3 have, so it cannot present itself as a USB HID keyboard -
@@ -35,11 +44,17 @@
 //   ACC,<mac>,<x>,<y>,<z>,<seq>\n
 //   KEY,<d-pin>,<seq>\n
 //   VOL,<UP|DOWN>,<seq>\n
+//   NEXT,<seq>\n
+//   GOOSE,<seq>\n
 //   HELLO,<mac>,<seq>\n
 // e.g. EVT,28:84:85:EA:78:4C,B,97
 //      ACC,28:84:85:EA:78:4C,120,-38,16200,412
-//      KEY,3,5                              (local switch on D3, 5th local press)
+//      KEY,4,5                              (local switch on D4, 5th local press; D4 is
+//                                            currently ACTION_NONE, so this is the only
+//                                            line a D4 press produces)
 //      VOL,UP,6                             (D1 pressed, 6th local press)
+//      NEXT,7                               (D7 pressed, 7th local press)
+//      GOOSE,8                              (all 7 local switches held at once)
 //      HELLO,28:84:85:EA:78:4C,3
 //
 // Input format, one line per command, from the website over serial:
@@ -94,23 +109,31 @@ typedef struct __attribute__((packed)) {
 // D1/D10 are wired as dedicated volume controls instead of game buttons -
 // they report VOL,UP/VOL,DOWN and never send EVT, so they don't also act
 // as a player's letter input.
-enum LocalKeyAction { ACTION_BUTTON, ACTION_VOLUME_UP, ACTION_VOLUME_DOWN };
+// D7 is a dedicated "advance the intro screen" control - it sends only a
+// NEXT line, never EVT, so it never plays a note or occupies a player/
+// creature slot. It's kept as its own line rather than having the website
+// react to "any D press" because a badge's own DOWN button also sends
+// letter 'D', and that must not also advance the intro screen.
+// No ACTION_BUTTON on purpose: this controller is a utility surface only
+// (volume, screen navigation, ...) and must never be able to produce a
+// badge-style EVT, which is what makes a press count as player/character
+// input in the website's game logic.
+enum LocalKeyAction { ACTION_NONE, ACTION_VOLUME_UP, ACTION_VOLUME_DOWN, ACTION_NEXT };
 
 struct LocalKey {
   uint8_t pin;
   uint8_t dPin;
   LocalKeyAction action;
-  char letter;  // only meaningful when action == ACTION_BUTTON
 };
 
 static const LocalKey LOCAL_KEYS[] = {
-  { D1, 1, ACTION_VOLUME_UP, 0 },
-  { D3, 3, ACTION_BUTTON, 'B' },
-  { D6, 6, ACTION_BUTTON, 'C' },
-  { D7, 7, ACTION_BUTTON, 'D' },
-  { D8, 8, ACTION_BUTTON, 'E' },
-  { D9, 9, ACTION_BUTTON, 'F' },
-  { D10, 10, ACTION_VOLUME_DOWN, 0 },
+  { D1, 1, ACTION_VOLUME_UP },
+  { D4, 4, ACTION_NONE },
+  { D6, 6, ACTION_NONE },
+  { D7, 7, ACTION_NEXT },
+  { D8, 8, ACTION_NONE },
+  { D9, 9, ACTION_NONE },
+  { D10, 10, ACTION_VOLUME_DOWN },
 };
 static const int LOCAL_KEY_COUNT = sizeof(LOCAL_KEYS) / sizeof(LOCAL_KEYS[0]);
 
@@ -118,6 +141,12 @@ static bool localStable[LOCAL_KEY_COUNT];
 static bool localLastRaw[LOCAL_KEY_COUNT];
 static uint16_t localSeq = 0;
 static String localSourceId;
+
+// Chord: all 7 local switches held down at once toggles goose mode. Edge-
+// detected off the already-debounced localStable[] states (checked after
+// the per-key loop settles them for this poll), so it fires exactly once
+// per chord rather than repeatedly for as long as it's held.
+static bool allKeysHeld = false;
 
 // Auto-repeat while a volume switch is held: after an initial pause (so a
 // quick tap stays a single step), it fires the same VOL line again every
@@ -273,12 +302,23 @@ void loop() {
       if (raw) {  // released -> pressed edge
         localPressStart[i] = now;
         localLastRepeat[i] = now;
-        if (LOCAL_KEYS[i].action == ACTION_BUTTON) {
-          localSeq++;
-          Serial.printf("EVT,%s,%c,%u\n", localSourceId.c_str(), LOCAL_KEYS[i].letter, localSeq);
-          Serial.printf("KEY,%u,%u\n", LOCAL_KEYS[i].dPin, localSeq);
-        } else {
-          sendVolumeEvent(LOCAL_KEYS[i]);
+        switch (LOCAL_KEYS[i].action) {
+          case ACTION_NONE:
+            // Unassigned pin: still report KEY so wiring can be verified
+            // on the /controller test page, but nothing that could ever
+            // register as game/player input.
+            localSeq++;
+            Serial.printf("KEY,%u,%u\n", LOCAL_KEYS[i].dPin, localSeq);
+            break;
+          case ACTION_NEXT:
+            localSeq++;
+            Serial.printf("NEXT,%u\n", localSeq);
+            Serial.printf("KEY,%u,%u\n", LOCAL_KEYS[i].dPin, localSeq);
+            break;
+          case ACTION_VOLUME_UP:
+          case ACTION_VOLUME_DOWN:
+            sendVolumeEvent(LOCAL_KEYS[i]);
+            break;
         }
       }
     }
@@ -293,6 +333,19 @@ void loop() {
       sendVolumeEvent(LOCAL_KEYS[i]);
     }
   }
+
+  bool nowAllHeld = true;
+  for (int i = 0; i < LOCAL_KEY_COUNT; i++) {
+    if (!localStable[i]) {
+      nowAllHeld = false;
+      break;
+    }
+  }
+  if (nowAllHeld && !allKeysHeld) {
+    localSeq++;
+    Serial.printf("GOOSE,%u\n", localSeq);
+  }
+  allKeysHeld = nowAllHeld;
 
   if (Serial.available()) {
     String line = Serial.readStringUntil('\n');
