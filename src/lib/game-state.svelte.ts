@@ -125,6 +125,30 @@ class GameState {
 	private lastSeenByMac = new Map<string, number>();
 	private livenessInterval: ReturnType<typeof setInterval> | undefined;
 
+	// Background beat: 90 BPM, 4/4, 16 steps/bar - kick on 1 & 9, snare on
+	// 5 & 13, hi-hat on every odd step (straight 8ths). Decoded from
+	// https://www.musicca.com/drum-machine#data=90-n-44-a--5acegikmo6em7ai-
+	// (Musicca has no audio export, only URL-encoded patterns, so this is
+	// resynthesized rather than downloaded - it also keeps the beat on the
+	// same procedural-audio approach as every other sound in the game).
+	// Step indices are 0-based here (URL letters a-p are 1-based).
+	private static readonly BEAT_BPM = 90;
+	private static readonly BEAT_STEPS = 16;
+	private static readonly KICK_STEPS = [0, 8];
+	private static readonly SNARE_STEPS = [4, 12];
+	private static readonly HIHAT_STEPS = [0, 2, 4, 6, 8, 10, 12, 14];
+	// Standard Web Audio "lookahead" scheduler: a coarse setInterval just
+	// checks whether it's time to schedule anything, but the actual sounds
+	// are scheduled via osc.start(<precise audioCtx time>) a bit ahead of
+	// now - firing sounds directly off the interval instead would drift/
+	// jitter audibly, since JS timers aren't sample-accurate.
+	private static readonly BEAT_SCHEDULE_AHEAD_S = 0.1;
+	private static readonly BEAT_SCHEDULE_INTERVAL_MS = 25;
+	private beatSchedulerId: ReturnType<typeof setInterval> | undefined;
+	private beatStepIndex = 0;
+	private beatNextStepTime = 0;
+	private noiseBufferCache: AudioBuffer | null = null;
+
 	private playTone(freq: number, duration = 0.4) {
 		if (!this.audioCtx) return;
 		const osc = this.audioCtx.createOscillator();
@@ -162,6 +186,108 @@ class GameState {
 	// distinct "the game just started" beat rather than one more tick.
 	playGoSound() {
 		[523.25, 659.25, 783.99].forEach((freq) => this.playTone(freq, 0.5));
+	}
+
+	// One second of white noise, generated once and reused for every snare/
+	// hi-hat hit rather than allocating a fresh buffer per hit for the whole
+	// song.
+	private noiseBuffer(): AudioBuffer | null {
+		if (!this.audioCtx) return null;
+		if (!this.noiseBufferCache) {
+			const buffer = this.audioCtx.createBuffer(1, this.audioCtx.sampleRate, this.audioCtx.sampleRate);
+			const data = buffer.getChannelData(0);
+			for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+			this.noiseBufferCache = buffer;
+		}
+		return this.noiseBufferCache;
+	}
+
+	private playKick(time: number) {
+		if (!this.audioCtx) return;
+		const osc = this.audioCtx.createOscillator();
+		const gain = this.audioCtx.createGain();
+		osc.type = 'sine';
+		osc.frequency.setValueAtTime(150, time);
+		osc.frequency.exponentialRampToValueAtTime(50, time + 0.12);
+
+		const peak = Math.max(0.6 * this.volume, 0.0001);
+		gain.gain.setValueAtTime(peak, time);
+		gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.15);
+
+		osc.connect(gain).connect(this.audioCtx.destination);
+		osc.start(time);
+		osc.stop(time + 0.15);
+	}
+
+	private playSnare(time: number) {
+		if (!this.audioCtx) return;
+		const buffer = this.noiseBuffer();
+		if (!buffer) return;
+		const noise = this.audioCtx.createBufferSource();
+		noise.buffer = buffer;
+		const bandpass = this.audioCtx.createBiquadFilter();
+		bandpass.type = 'bandpass';
+		bandpass.frequency.value = 1800;
+		const gain = this.audioCtx.createGain();
+
+		const peak = Math.max(0.35 * this.volume, 0.0001);
+		gain.gain.setValueAtTime(peak, time);
+		gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.15);
+
+		noise.connect(bandpass).connect(gain).connect(this.audioCtx.destination);
+		noise.start(time);
+		noise.stop(time + 0.15);
+	}
+
+	private playHihat(time: number) {
+		if (!this.audioCtx) return;
+		const buffer = this.noiseBuffer();
+		if (!buffer) return;
+		const noise = this.audioCtx.createBufferSource();
+		noise.buffer = buffer;
+		const highpass = this.audioCtx.createBiquadFilter();
+		highpass.type = 'highpass';
+		highpass.frequency.value = 7000;
+		const gain = this.audioCtx.createGain();
+
+		const peak = Math.max(0.15 * this.volume, 0.0001);
+		gain.gain.setValueAtTime(peak, time);
+		gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.05);
+
+		noise.connect(highpass).connect(gain).connect(this.audioCtx.destination);
+		noise.start(time);
+		noise.stop(time + 0.05);
+	}
+
+	private scheduleBeatStep(step: number, time: number) {
+		if (GameState.KICK_STEPS.includes(step)) this.playKick(time);
+		if (GameState.SNARE_STEPS.includes(step)) this.playSnare(time);
+		if (GameState.HIHAT_STEPS.includes(step)) this.playHihat(time);
+	}
+
+	// Starts the background beat looping indefinitely; call stopBeatLoop() to
+	// end it (there's no fixed length - it just keeps going until stopped).
+	startBeatLoop() {
+		this.stopBeatLoop();
+		if (!this.audioCtx) this.audioCtx = new AudioContext();
+
+		const secondsPerStep = 60 / GameState.BEAT_BPM / 4; // 16th notes
+		this.beatStepIndex = 0;
+		this.beatNextStepTime = this.audioCtx.currentTime + 0.05;
+
+		this.beatSchedulerId = setInterval(() => {
+			if (!this.audioCtx) return;
+			while (this.beatNextStepTime < this.audioCtx.currentTime + GameState.BEAT_SCHEDULE_AHEAD_S) {
+				this.scheduleBeatStep(this.beatStepIndex, this.beatNextStepTime);
+				this.beatNextStepTime += secondsPerStep;
+				this.beatStepIndex = (this.beatStepIndex + 1) % GameState.BEAT_STEPS;
+			}
+		}, GameState.BEAT_SCHEDULE_INTERVAL_MS);
+	}
+
+	stopBeatLoop() {
+		clearInterval(this.beatSchedulerId);
+		this.beatSchedulerId = undefined;
 	}
 
 	private playerFor(mac: string): number {
@@ -476,6 +602,7 @@ class GameState {
 		this.livenessInterval = undefined;
 		clearTimeout(this.volumeHideTimeout);
 		this.volumeVisible = false;
+		this.stopBeatLoop();
 		try {
 			await this.reader?.cancel();
 		} catch {
