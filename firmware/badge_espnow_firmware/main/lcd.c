@@ -1,4 +1,4 @@
-// ST7789 bring-up and a full-screen image renderer.
+// ST7789 bring-up and a name-banner renderer.
 //
 // Pin map and init fixups (invert_color/swap_xy/mirror) are exactly as
 // documented in the Custom Flash HAL guide: SPI2, MOSI=10, CLK=1, CS=2,
@@ -7,9 +7,9 @@
 // UI uses.
 
 #include "lcd.h"
-#include "acon_front.c"
+#include "creature_banners.h"
 
-#include <string.h>
+#include <stdbool.h>
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_lcd_panel_io.h"
@@ -32,17 +32,12 @@
 static const char *TAG = "lcd";
 
 #define COLOR_WHITE 0xFFFF
+#define COLOR_BLACK 0x0000
 
-// Shifts the image down on screen: adds a blank margin at the top and
-// clips the same number of rows off the image's bottom edge (it's already
-// full-height, so there's nowhere else for them to go).
-#define IMAGE_Y_OFFSET 0
-
-// badge_image[] (defined in acon_front.c) lives in flash (rodata); the SPI DMA engine can't source
-// from flash-mapped memory directly, so each band is memcpy'd (a plain CPU
-// read through the flash cache, which is fine) into this small RAM
-// staging buffer before handing it to the panel - a few KB instead of a
-// full 320x240 (153,600-byte) framebuffer.
+// Staging buffer for one band's worth of pixels: the SPI DMA engine can't
+// source from flash-mapped rodata directly, so drawing a stored image goes
+// through here a band at a time - a few KB instead of a full 320x240
+// (153,600-byte) framebuffer.
 #define BAND_ROWS 16
 static uint16_t s_band[BAND_ROWS * LCD_H_RES];
 
@@ -134,30 +129,31 @@ static void fill_white(esp_lcd_panel_handle_t panel, int y0, int y1) {
     }
 }
 
-void lcd_draw_image(esp_lcd_panel_handle_t panel) {
-    _Static_assert(BADGE_IMAGE_WIDTH == LCD_H_RES && BADGE_IMAGE_HEIGHT == LCD_V_RES,
-                   "acon_front.c must match the panel's 320x240 resolution");
+void lcd_draw_banner(esp_lcd_panel_handle_t panel, const uint8_t *banner, const char *label) {
+    _Static_assert(CREATURE_BANNER_WIDTH == LCD_H_RES, "creature_banners.h must match panel width");
+    _Static_assert(CREATURE_BANNER_HEIGHT % BAND_ROWS == 0, "banner height must be a whole number of bands");
 
-    // Blank margin at the top, where the shifted-down image doesn't reach.
-    fill_white(panel, 0, IMAGE_Y_OFFSET);
+    ESP_LOGI(TAG, "drawing banner '%s'", label);
 
-    // Image itself, shifted down by IMAGE_Y_OFFSET; its bottom
-    // IMAGE_Y_OFFSET rows run past the screen edge and are dropped.
-    int visible_rows = LCD_V_RES - IMAGE_Y_OFFSET;
-    int src_y = 0;
-    while (src_y < visible_rows) {
-        int rows = visible_rows - src_y;
-        if (rows > BAND_ROWS) rows = BAND_ROWS;
-        memcpy(s_band, &badge_image[src_y * LCD_H_RES], (size_t)rows * LCD_H_RES * sizeof(uint16_t));
-        draw_band(panel, IMAGE_Y_OFFSET + src_y, rows);
-        src_y += rows;
+    int y_offset = (LCD_V_RES - CREATURE_BANNER_HEIGHT) / 2;
+
+    fill_white(panel, 0, y_offset);
+
+    // Banner is a 1bpp mask (MSB-first per row-byte); expand it to RGB565
+    // into s_band one band at a time instead of storing the full-color
+    // pixels - it's pure black-on-white text, so this loses nothing and
+    // shrinks four banners from ~120KB of rodata to ~7.7KB.
+    for (int src_y = 0; src_y < CREATURE_BANNER_HEIGHT; src_y += BAND_ROWS) {
+        for (int row = 0; row < BAND_ROWS; row++) {
+            const uint8_t *row_bits = &banner[(src_y + row) * CREATURE_BANNER_BYTES_PER_ROW];
+            uint16_t *row_pixels = &s_band[row * LCD_H_RES];
+            for (int x = 0; x < LCD_H_RES; x++) {
+                bool set = (row_bits[x / 8] >> (7 - (x % 8))) & 1;
+                row_pixels[x] = set ? COLOR_BLACK : COLOR_WHITE;
+            }
+        }
+        draw_band(panel, y_offset + src_y, BAND_ROWS);
     }
 
-    // Bottom margin: nothing has ever been drawn to these rows for this
-    // frame, so without this they'd still show whatever the previous
-    // draw left there (this was the "bottom part repeats" artifact - the
-    // clipped-off bottom strip of the un-shifted image, never cleared).
-    fill_white(panel, IMAGE_Y_OFFSET + visible_rows, LCD_V_RES);
-
-    ESP_LOGI(TAG, "badge image drawn (shifted down %d px)", IMAGE_Y_OFFSET);
+    fill_white(panel, y_offset + CREATURE_BANNER_HEIGHT, LCD_V_RES);
 }

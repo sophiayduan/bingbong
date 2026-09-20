@@ -25,3 +25,6 @@ vite.config.ts.timestamp-*
 # ESP-IDF (firmware/badge_espnow_firmware)
 firmware/badge_espnow_firmware/build
 firmware/badge_espnow_firmware/sdkconfig
+
+# arduino-cli (firmware/xiao_espnow_gateway)
+firmware/xiao_espnow_gateway/build
