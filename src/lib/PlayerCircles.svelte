@@ -82,6 +82,19 @@
 		return FIRE_MIN_OPACITY + ((combo - 3) / 2) * (1 - FIRE_MIN_OPACITY);
 	}
 
+	// The flicker itself speeds up as the streak climbs, on top of the
+	// opacity ramp above - full brightness (combo 5) still flickers at the
+	// normal rate, then keeps accelerating up to FIRE_RAPID_COMBO before
+	// capping out at FIRE_MIN_DURATION_MS.
+	const FIRE_MAX_DURATION_MS = 900;
+	const FIRE_MIN_DURATION_MS = 150;
+	const FIRE_RAPID_COMBO = 20;
+	function fireFlickerDurationMs(combo: number) {
+		if (combo <= 5) return FIRE_MAX_DURATION_MS;
+		const t = Math.min(1, (combo - 5) / (FIRE_RAPID_COMBO - 5));
+		return FIRE_MAX_DURATION_MS + (FIRE_MIN_DURATION_MS - FIRE_MAX_DURATION_MS) * t;
+	}
+
 	// A combo this high swaps the character to its win sprite; this many
 	// misses in a row (tracked separately from combo - see missStreaks)
 	// swaps it to the lose sprite instead. Both are easy to retune.
@@ -119,6 +132,11 @@
 	// of the page" instead of running the oval off the edge.
 	const POOL_BOTTOM_MARGIN_PX = 40;
 
+	// How far below the winner's feet (the bottom of their circle) the pool's
+	// own bottom edge sits - keeps the pool reading as a patch of ground the
+	// winner is standing on, rather than a puddle overlapping their legs.
+	const POOL_GAP_BELOW_PLAYER_PX = 56;
+
 	function measureSpotlight() {
 		if (!gameState.matchOver || finalTopScore <= 0) {
 			spotlight = null;
@@ -131,7 +149,6 @@
 		if (!el) return;
 		const rect = el.getBoundingClientRect();
 		const cx = rect.left + rect.width / 2;
-		const cy = rect.top + rect.height / 2;
 		const r = Math.max(rect.width, rect.height) / 2;
 		const poolRx = r * 1.1;
 		const poolRy = poolRx * 0.32;
@@ -140,7 +157,10 @@
 			topHalf: r * 0.45,
 			poolRx,
 			poolRy,
-			poolCy: Math.min(cy + r * 0.25, window.innerHeight - poolRy - POOL_BOTTOM_MARGIN_PX)
+			poolCy: Math.min(
+				rect.bottom + POOL_GAP_BELOW_PLAYER_PX - poolRy,
+				window.innerHeight - poolRy - POOL_BOTTOM_MARGIN_PX
+			)
 		};
 	}
 
@@ -265,7 +285,7 @@
 		{#each PLAYER_COLORS as _, i (i)}
 			{@const p = gameState.playerStates.get(i + 1)}
 			{@const slot = SLOTS[i]}
-			{@const isDevSelected = import.meta.env.DEV && devInput.selectedPlayer === i + 1}
+			{@const isDevSelected = import.meta.env.DEV && devInput.enabled && devInput.selectedPlayer === i + 1}
 			{@const combo = gameState.hasStartedPlay ? (rhythmGame.combos.get(i + 1) ?? 0) : 0}
 			{@const missStreak = gameState.hasStartedPlay ? (rhythmGame.missStreaks.get(i + 1) ?? 0) : 0}
 			{@const score = gameState.scores.get(i + 1) ?? 0}
@@ -286,6 +306,20 @@
 				: p?.flash
 					? 'scale-110'
 					: 'scale-100'}
+			{@const playerLift = gameState.matchOver && isWinning ? '-translate-y-32' : ''}
+			<!-- A press on the results screen (flash - see registerButtonPress
+			     in game-state.svelte.ts, held much longer once matchOver) briefly
+			     bumps the frozen win/lose sprite aside for that creature's emote
+			     art, then falls back once the flash times out. Always the plain
+			     creature emote, same as win/lose above it staying creature-
+			     specific even in goose mode. -->
+			{@const isEmoting = gameState.matchOver && !!p?.flash}
+			<!-- The winner's name/score/combo swap to above its head instead of
+			     below - everyone else keeps the usual below-the-circle layout.
+			     Implemented as two snippets rendered in whichever order fits,
+			     rather than one fixed block, so the DOM/bindings stay identical
+			     either way. -->
+			{@const statsAboveHead = gameState.matchOver && isWinning}
 			{@const sprite = gameState.gooseMode
 				? p?.flash
 					? gooseBing
@@ -294,31 +328,26 @@
 					? slot.bing
 					: slot.normal}
 			{@const tint = gameState.gooseMode ? GOOSE_MODE_TINTS[i] : null}
-			<div
-				class="relative flex w-50 shrink-0 flex-col items-center lg:w-90 {gameState.hasStartedPlay
-					? '-space-y-8 min-h-0'
-					: 'group -space-y-2'}"
-				style="z-index: {PLAYER_COLORS.length - i}"
-				role="group"
-				onmouseenter={gameState.hasStartedPlay ? undefined : () => startWave(i)}
-				onmouseleave={gameState.hasStartedPlay ? undefined : () => stopWave(i)}
-			>
+			{#snippet avatar()}
 				<div
 					class="relative flex items-center justify-center {big
 						? 'h-50 w-50 lg:h-90 lg:w-90'
 						: 'h-50 w-50 lg:h-90 lg:w-90'}"
 				>
-					{#if fireGlowOpacity(combo) > 0}
+					{#if !gameState.matchOver && fireGlowOpacity(combo) > 0}
 						<!-- inset-0 + m-auto can't center a box bigger than its parent
 						     (the centering math needs negative margins, which the spec
 						     forbids - it pins to an edge instead) - translate-based
-						     centering has no such size limit. -->
+						     centering has no such size limit. Suppressed once
+						     matchOver, even for a player who ended on a streak - the
+						     results view is about the win/lose spotlight, not the
+						     mid-round combo glow. -->
 						<div
 							class="pointer-events-none absolute top-[36%] left-1/2 h-[140%] w-[140%] -translate-x-1/2 -translate-y-1/2"
-							style="opacity: {fireGlowOpacity(combo)}"
+							style="opacity: {fireGlowOpacity(combo)}; --fire-duration: {fireFlickerDurationMs(combo)}ms"
 						>
-							<img src={fire1} alt="" class="sprite-alt-a absolute inset-0 h-full w-full object-contain" />
-							<img src={fire2} alt="" class="sprite-alt-b absolute inset-0 h-full w-full object-contain" />
+							<img src={fire1} alt="" class="fire-alt-a absolute inset-0 h-full w-full object-contain" />
+							<img src={fire2} alt="" class="fire-alt-b absolute inset-0 h-full w-full object-contain" />
 						</div>
 					{/if}
 					<div
@@ -328,7 +357,9 @@
 							? ''
 							: 'grayscale group-hover:grayscale-0  group-hover:scale-110 p-2 group-hover:-translate-y-6'}"
 					>
-						{#if isWinning}
+						{#if isEmoting}
+							<img src={slot.emote} alt="" class="absolute inset-0 h-full w-full object-cover" />
+						{:else if isWinning}
 							<!-- Loops (sprite-alt-a/b) rather than flapping once and
 							     holding - a winner keeps celebrating for as long as
 							     it's shown, unlike the one-shot lose pose below. -->
@@ -348,10 +379,14 @@
 						{/if}
 					</div>
 				</div>
+			{/snippet}
+			{#snippet stats()}
 				<div class="flex flex-col items-center">
 					<p
 						bind:this={nameEls[i]}
-						class="text-center text-lg xl:text-2xl origin-center transition-transform duration-150 group-hover:scale-125 group-hover:text-shadow-sm font-cloud text-white/40 group-hover:text-white"
+						class="text-center text-lg xl:text-2xl origin-center transition-transform duration-150 group-hover:scale-125 group-hover:text-shadow-sm font-cloud {statsAboveHead
+							? 'text-white'
+							: 'text-white/40 group-hover:text-white'}"
 					>
 						{#each slot.name as char, ci (ci)}
 							<span class="letter inline-block">{char}</span>
@@ -361,8 +396,10 @@
 						<div class="flex items-baseline gap-1.5">
 							<p
 								bind:this={scoreEls[i]}
-								class="text-center text-2xl xl:text-4xl font-cloud text-shadow-gray-800 text-shadow-xs"
-								style="color: {scoreColor(score)}"
+								class="text-center font-cloud text-shadow-gray-800 text-shadow-xs {statsAboveHead
+									? 'text-4xl xl:text-6xl'
+									: 'text-2xl xl:text-4xl'}"
+								style="color: {statsAboveHead ? 'white' : scoreColor(score)}"
 							>
 								{score}
 							</p>
@@ -371,7 +408,9 @@
 									bind:this={comboEls[i]}
 									class="text-lg font-jua xl:text-2xl {comboBreakValue[i] !== null
 										? 'text-red-400'
-										: 'text-white/70'}"
+										: statsAboveHead
+											? 'text-white'
+											: 'text-white/70'}"
 								>
 									x{comboBreakValue[i] ?? combo}
 								</p>
@@ -379,6 +418,34 @@
 						</div>
 					{/if}
 				</div>
+			{/snippet}
+			<div
+				class="relative flex w-50 shrink-0 flex-col items-center transition-transform duration-300 lg:w-90 {gameState.hasStartedPlay
+					? '-space-y-8 min-h-0'
+					: 'group -space-y-2'} {playerLift}"
+				style="z-index: {PLAYER_COLORS.length - i}"
+				role="group"
+				onmouseenter={gameState.hasStartedPlay ? undefined : () => startWave(i)}
+				onmouseleave={gameState.hasStartedPlay ? undefined : () => stopWave(i)}
+			>
+				<!-- The winner's stats float as an absolutely-positioned overlay
+				     above the avatar's own box rather than a normal flex sibling
+				     - if they took up real flex-column space up here they'd push
+				     the avatar itself down by that much, which fights the
+				     playerLift translate above and left the winner sitting no
+				     higher (sometimes lower) than everyone else instead of
+				     visibly raised above the row's shared baseline. -->
+				<div class="relative">
+					{@render avatar()}
+					{#if statsAboveHead}
+						<div class="pointer-events-none absolute inset-x-0 bottom-full flex flex-col items-center pb-2">
+							{@render stats()}
+						</div>
+					{/if}
+				</div>
+				{#if !statsAboveHead}
+					{@render stats()}
+				{/if}
 			</div>
 		{/each}
 	</div>
@@ -470,5 +537,18 @@
 	.sprite-alt-b {
 		animation: sprite-alt 900ms steps(1, end) infinite;
 		animation-delay: 450ms;
+	}
+
+	/* Same hard-cut alternation as sprite-alt-a/b, but with a duration driven
+	   by --fire-duration so the fire glow can flicker faster the higher a
+	   streak climbs (see fireFlickerDurationMs) instead of the fixed 900ms
+	   the win/lose sprites use. */
+	.fire-alt-a {
+		animation: sprite-alt var(--fire-duration, 900ms) steps(1, end) infinite;
+	}
+
+	.fire-alt-b {
+		animation: sprite-alt var(--fire-duration, 900ms) steps(1, end) infinite;
+		animation-delay: calc(var(--fire-duration, 900ms) / 2);
 	}
 </style>

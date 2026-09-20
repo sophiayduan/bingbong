@@ -12,6 +12,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { gsap } from 'gsap';
 	import { gameState, supported } from '$lib/game-state.svelte';
+	import { devInput } from '$lib/dev-input.svelte';
 	import Countdown from '$lib/Countdown.svelte';
 	import MatchTimer from '$lib/MatchTimer.svelte';
 	import ResultsScreen from '$lib/ResultsScreen.svelte';
@@ -28,12 +29,26 @@
 
 	let titleTween: gsap.core.Tween | undefined;
 
+	// The title's letters are smaller below Tailwind's sm breakpoint
+	// (text-6xl vs sm:text-8xl/lg:text-9xl - see the h1 below), so the wave's
+	// travel distance is scaled down to match instead of staying fixed and
+	// looking oversized relative to the shrunk text.
+	let isSmallScreen = $state(false);
+
+	onMount(() => {
+		const mq = window.matchMedia('(min-width: 640px)');
+		const update = () => (isSmallScreen = !mq.matches);
+		update();
+		mq.addEventListener('change', update);
+		return () => mq.removeEventListener('change', update);
+	});
+
 	$effect(() => {
 		if (!titleEl) return;
 		const letters = titleEl.querySelectorAll('.letter');
 		titleTween?.kill();
 		titleTween = gsap.to(letters, {
-			y: gameState.hasStartedPlay ? -4 : -14,
+			y: gameState.hasStartedPlay ? -4 : isSmallScreen ? -8 : -14,
 			duration: gameState.hasStartedPlay ? 1.6 : 0.8,
 			ease: 'sine.inOut',
 			repeat: -1,
@@ -76,7 +91,8 @@
 </svelte:head>
 
 <div
-	class="absolute inset-0 -z-10 grid bg-blue transition-transform duration-[1200ms] ease-in-out {gameState.hasStartedPlay
+	class="absolute inset-0 -z-10 grid bg-blue transition-transform duration-[1200ms] ease-in-out {gameState.hasStartedPlay &&
+	!gameState.matchOver
 		? 'translate-y-40'
 		: ''}"
 >
@@ -216,7 +232,8 @@
      everything in <main> - notes fall past the hit bar and disappear
      behind this, rather than the reverse. -->
 <div
-	class="pointer-events-none absolute inset-0 z-10 grid transition-transform duration-[1200ms] ease-in-out {gameState.hasStartedPlay
+	class="pointer-events-none absolute inset-0 z-10 grid transition-transform duration-[1200ms] ease-in-out {gameState.hasStartedPlay &&
+	!gameState.matchOver
 		? 'translate-y-40'
 		: ''}"
 >
@@ -226,6 +243,6 @@
 <Countdown />
 <MatchTimer />
 <ResultsScreen />
-{#if import.meta.env.DEV}
+{#if import.meta.env.DEV && devInput.enabled}
 	<DevKeyboardInput />
 {/if}

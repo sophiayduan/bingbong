@@ -68,11 +68,27 @@
 		const speed = 1.5 + (seed % 5) / 5; // 1.5-2.5 cycles over the fall
 		return Math.sin(progress * Math.PI * 2 * speed + seed) * amplitude;
 	}
+
+	// Top edge of the hit bar, in the same lane-relative coordinate frame as
+	// hitLineTopPx (its vertical center) - derived rather than imported since
+	// only PlayerCircles.svelte knows barHeightPx, which it already passes
+	// down as a prop. A small extra gap keeps the text from touching the bar.
+	const FEEDBACK_GAP_PX = 6;
+	const feedbackTopPx = $derived(hitLineTopPx - barHeightPx / 2 - FEEDBACK_GAP_PX);
+
+	// PERFECT/GOOD/MISS reads as gold/light-green/red - miss and good match
+	// the same colors used elsewhere for a broken combo and a healthy one.
+	function feedbackColor(text: string) {
+		if (text === 'PERFECT') return 'text-yellow';
+		if (text === 'GOOD') return 'text-light-green';
+		if (text === 'MISS') return 'text-red-400';
+		return 'text-white';
+	}
 </script>
 
 <div class="relative flex h-full items-end justify-center mx-auto">
 	{#each COLUMNS as col (col.key)}
-		<div class="relative h-full w-20 lg:w-28 border-2 border-black" style={col.key === 'ab' ? 'border-left: 0px' : ''}>
+		<div class="relative h-full w-20 lg:w-28">
 			{#each rhythmGame.notesFor(player, col.key) as n (n.id)}
 				{@const isMiss = n.resolved === 'miss'}
 				{@const isHit = n.resolved === 'perfect' || n.resolved === 'good'}
@@ -124,14 +140,22 @@
 		</div>
 	{/each}
 
-	{#if rhythmGame.feedback.get(player)}
-		<div
-			class="pointer-events-none absolute left-1/2 -translate-x-1/2 -translate-y-full font-jua text-base text-white text-shadow-sm lg:text-xl"
-			style="top: {hitLineTopPx}px;"
-		>
-			{rhythmGame.feedback.get(player)?.text}
-		</div>
-	{/if}
+	{#key rhythmGame.feedback.get(player)?.id}
+		{#if rhythmGame.feedback.get(player)}
+			<div
+				class="pointer-events-none absolute left-1/2 -translate-x-1/2 -translate-y-full"
+				style="top: {feedbackTopPx}px;"
+			>
+				<span
+					class="feedback-pop inline-block font-jua text-base text-shadow-xs lg:text-xl {feedbackColor(
+						rhythmGame.feedback.get(player)?.text ?? ''
+					)}"
+				>
+					{rhythmGame.feedback.get(player)?.text}
+				</span>
+			</div>
+		{/if}
+	{/key}
 
 	{#key rhythmGame.milestoneFeedback.get(player)?.id}
 		{#if rhythmGame.milestoneFeedback.get(player)}
@@ -167,6 +191,28 @@
 
 	.hit-flash {
 		animation: hit-flash 300ms ease-out forwards;
+	}
+
+	/* Same overshoot-then-settle bump the score number gets (gsap
+	   fromTo scale 1.6 -> 1, back.out(3)) - approximated here in CSS since
+	   this text is remounted per feedback id (see {#key} above) rather than
+	   driven by an effect. Scoped to this inline span rather than the
+	   positioning wrapper so it doesn't clobber that wrapper's own
+	   centering/anchoring transform. */
+	@keyframes feedback-pop {
+		0% {
+			transform: scale(1.6);
+		}
+		70% {
+			transform: scale(0.92);
+		}
+		100% {
+			transform: scale(1);
+		}
+	}
+
+	.feedback-pop {
+		animation: feedback-pop 400ms ease-out forwards;
 	}
 
 	/* Pops in, holds, then fades - lasts the same 900ms as
