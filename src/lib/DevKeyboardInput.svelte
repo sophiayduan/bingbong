@@ -20,6 +20,13 @@
 			devInput.selectedPlayer = Number(e.key);
 			return;
 		}
+		// Stands in for the D4 switch on the XIAO (see
+		// firmware/xiao_espnow_gateway/main/main.c's ACTION_HOME) so the
+		// "back to start" behavior can be tested without real hardware.
+		if (e.key.toLowerCase() === 'h') {
+			gameState.returnToStartScreen();
+			return;
+		}
 		const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
 		const button = KEY_TO_BUTTON[key];
 		if (!button) return;
@@ -35,5 +42,5 @@
 >
 	Dev keyboard: arrows = U/D/L/R, A/B keys = A/B - controlling
 	<span class="font-semibold text-white">{NAMES[devInput.selectedPlayer - 1]}</span>
-	- press 1-4 to switch
+	- press 1-4 to switch, h = back to start
 </div>

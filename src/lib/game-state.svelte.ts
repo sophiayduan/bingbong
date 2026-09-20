@@ -176,9 +176,11 @@ class GameState {
 	}
 
 	// Sawtooth dropped an octave (plus a sub-sine another octave below that
-	// for weight) through a tight lowpass - reads as a deep plucked electric
-	// bass string rather than a synth blip at the note's own register.
-	private playBassTone(freq: number, duration = 0.4) {
+	// for weight) through a tight lowpass, with a quick downward pitch glide
+	// right after the attack (a plucked string momentarily going sharp
+	// before settling) - reads as a deep plucked electric bass string. The
+	// longest, lowest, thumpiest voice of the four.
+	private playBassTone(freq: number, duration = 0.55) {
 		if (!this.audioCtx) return;
 		const bassFreq = freq / 2;
 		const osc = this.audioCtx.createOscillator();
@@ -187,7 +189,9 @@ class GameState {
 		const filter = this.audioCtx.createBiquadFilter();
 		const gain = this.audioCtx.createGain();
 		osc.type = 'sawtooth';
-		osc.frequency.value = bassFreq;
+		const now = this.audioCtx.currentTime;
+		osc.frequency.setValueAtTime(bassFreq * 1.08, now);
+		osc.frequency.exponentialRampToValueAtTime(bassFreq, now + 0.09);
 		sub.type = 'sine';
 		sub.frequency.value = bassFreq / 2;
 		subGain.gain.value = 0.5;
@@ -195,7 +199,6 @@ class GameState {
 		filter.frequency.value = 500;
 		filter.Q.value = 1.2;
 
-		const now = this.audioCtx.currentTime;
 		// Character voices are pitched well above the background beat's
 		// loudest component (the kick, at 0.6 * volume) - presses should
 		// always read clearly over the beat, not blend into it.
@@ -213,10 +216,12 @@ class GameState {
 		sub.stop(now + duration);
 	}
 
-	// Sawtooth with a slow bowed attack, a bandpass tuned above the
+	// Sawtooth with a slow bowed swell into a held sustain (not an
+	// immediate decay like the others), a bandpass tuned above the
 	// fundamental for stringiness, and a pitch-vibrato LFO - reads as a
-	// bowed violin note rather than a struck one.
-	private playViolinTone(freq: number, duration = 0.6) {
+	// bowed, singing violin note. The longest and most sustained voice of
+	// the four, on purpose - a violin doesn't get plucked or blatted.
+	private playViolinTone(freq: number, duration = 0.9) {
 		if (!this.audioCtx) return;
 		const osc = this.audioCtx.createOscillator();
 		const vibrato = this.audioCtx.createOscillator();
@@ -227,19 +232,19 @@ class GameState {
 		osc.frequency.value = freq;
 		vibrato.type = 'sine';
 		vibrato.frequency.value = 5.5;
-		vibratoGain.gain.value = freq * 0.01;
+		vibratoGain.gain.value = freq * 0.012;
 		vibrato.connect(vibratoGain).connect(osc.frequency);
 		filter.type = 'bandpass';
 		filter.frequency.value = freq * 2;
 		filter.Q.value = 3;
 
 		const now = this.audioCtx.currentTime;
-		// Character voices are pitched well above the background beat's
-		// loudest component (the kick, at 0.6 * volume).
 		const peak = Math.max(1.2 * this.volume, 0.0001);
+		const sustainEnd = now + duration * 0.55;
 		gain.gain.setValueAtTime(0, now);
-		gain.gain.linearRampToValueAtTime(peak, now + 0.08);
-		gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+		gain.gain.linearRampToValueAtTime(peak, now + 0.1); // slow bowed swell
+		gain.gain.setValueAtTime(peak, sustainEnd); // held, singing sustain
+		gain.gain.exponentialRampToValueAtTime(0.0001, now + duration); // slow bow-off
 
 		osc.connect(filter).connect(gain).connect(this.audioCtx.destination);
 		osc.start(now);
@@ -248,30 +253,43 @@ class GameState {
 		vibrato.stop(now + duration);
 	}
 
-	// Square wave (rich in odd harmonics) through a sharp resonant bandpass
-	// and a fast attack - reads as a bright brassy trumpet stab.
-	private playTrumpetTone(freq: number, duration = 0.4) {
+	// Two square waves a few cents apart (a brass-section unison, not a
+	// single thin square) through a sharp resonant bandpass, with a quick
+	// upward pitch scoop into the note (a brass "doit" attack) and a held
+	// sustain before decaying - reads as a bright, blatty trumpet stab.
+	private playTrumpetTone(freq: number, duration = 0.45) {
 		if (!this.audioCtx) return;
-		const osc = this.audioCtx.createOscillator();
+		const osc1 = this.audioCtx.createOscillator();
+		const osc2 = this.audioCtx.createOscillator();
 		const filter = this.audioCtx.createBiquadFilter();
 		const gain = this.audioCtx.createGain();
-		osc.type = 'square';
-		osc.frequency.value = freq;
+		osc1.type = 'square';
+		osc2.type = 'square';
+		const now = this.audioCtx.currentTime;
+		osc1.frequency.setValueAtTime(freq * 0.85, now);
+		osc1.frequency.exponentialRampToValueAtTime(freq, now + 0.05);
+		osc2.frequency.setValueAtTime(freq * 0.85 * 1.006, now);
+		osc2.frequency.exponentialRampToValueAtTime(freq * 1.006, now + 0.05);
 		filter.type = 'bandpass';
 		filter.frequency.value = freq * 3;
 		filter.Q.value = 6;
 
-		const now = this.audioCtx.currentTime;
 		// Character voices are pitched well above the background beat's
 		// loudest component (the kick, at 0.6 * volume).
 		const peak = Math.max(1.3 * this.volume, 0.0001);
+		const sustainEnd = now + duration * 0.5;
 		gain.gain.setValueAtTime(0, now);
-		gain.gain.linearRampToValueAtTime(peak, now + 0.015);
+		gain.gain.linearRampToValueAtTime(peak, now + 0.02);
+		gain.gain.setValueAtTime(peak, sustainEnd);
 		gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
 
-		osc.connect(filter).connect(gain).connect(this.audioCtx.destination);
-		osc.start(now);
-		osc.stop(now + duration);
+		osc1.connect(filter);
+		osc2.connect(filter);
+		filter.connect(gain).connect(this.audioCtx.destination);
+		osc1.start(now);
+		osc2.start(now);
+		osc1.stop(now + duration);
+		osc2.stop(now + duration);
 	}
 
 	// Recorded honk (see static/audio/honk-sound.mp3), decoded once and
@@ -550,6 +568,23 @@ class GameState {
 		this.countingDown = false;
 	}
 
+	// Both volume switches on the XIAO held together, and nothing else (see
+	// the HOME line in xiao_espnow_gateway/main/main.c), sends everyone back
+	// to the main start screen mid-game. Badges stay paired and keep their
+	// slot/creature (playerByMac/creatureByMac are untouched) - only the
+	// in-progress run resets, the same things a fresh connect() would clear.
+	returnToStartScreen() {
+		this.stopMatchTimer();
+		this.matchSecondsRemaining = null;
+		this.stopBeatLoop();
+		rhythmGame.reset();
+		this.hasStartedPlay = false;
+		this.countingDown = false;
+		this.gooseMode = false;
+		this.scores = new Map();
+		goto('/');
+	}
+
 	// Starts the 20-second match clock - call once, right at GO (see
 	// Countdown.svelte). Ticks once a second; when it reaches 0 the match
 	// ends the same way as the chart simply running out (see endMatch).
@@ -595,6 +630,7 @@ class GameState {
 	//   "VOL,<UP|DOWN>,<seq>", e.g. "VOL,UP,7" - from the D1/D10 switches
 	//   "NEXT,<seq>", e.g. "NEXT,8" - from the D7 switch specifically
 	//   "GOOSE,<seq>", e.g. "GOOSE,9" - all 7 local switches held at once
+	//   "HOME,<seq>", e.g. "HOME,10" - both volume switches held, no others
 	private handleLine(line: string) {
 		if (line.startsWith('EVT,')) {
 			this.handleButtonLine(line);
@@ -613,6 +649,8 @@ class GameState {
 			// Kick off the fetch/decode as soon as goose mode turns on, so
 			// it's ready by the time anyone actually presses a button.
 			if (this.gooseMode) this.ensureHonkBufferLoaded();
+		} else if (line.startsWith('HOME,')) {
+			this.returnToStartScreen();
 		}
 	}
 

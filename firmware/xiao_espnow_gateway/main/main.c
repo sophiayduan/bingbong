@@ -21,8 +21,10 @@
 //     control. Kept as its own line (rather than having the website react to
 //     "any D press") because a badge's own DOWN button sends letter 'D', and
 //     that must not also advance the intro screen;
-//   - D4/D6/D8/D9 are currently unassigned (ACTION_NONE) - reserved for
-//     future minor controls, deliberately not wired to any game input;
+//   - as a HOME line for D4, wired as a dedicated "back to the main start
+//     screen" control;
+//   - D6/D8/D9 are currently unassigned (ACTION_NONE) - reserved for future
+//     minor controls, deliberately not wired to any game input;
 //   - as a separate KEY line naming the raw D-pin number, for every local
 //     switch regardless of its action (including the unassigned ones), read
 //     only by the /controller test page so wiring can be verified pin-by-pin;
@@ -36,15 +38,14 @@
 //   VOL,<UP|DOWN>,<seq>\n
 //   NEXT,<seq>\n
 //   GOOSE,<seq>\n
+//   HOME,<seq>\n
 //   HELLO,<mac>,<seq>\n
 // e.g. EVT,28:84:85:EA:78:4C,B,97
 //      ACC,28:84:85:EA:78:4C,120,-38,16200,412
-//      KEY,4,5                              (local switch on D4, 5th local press; D4 is
-//                                            currently ACTION_NONE, so this is the only
-//                                            line a D4 press produces)
 //      VOL,UP,6                             (D1 pressed, 6th local press)
 //      NEXT,7                               (D7 pressed, 7th local press)
-//      GOOSE,8                              (all 7 local switches held at once)
+//      HOME,8                               (D4 pressed, 8th local press)
+//      GOOSE,9                              (all 7 local switches held at once)
 //      HELLO,28:84:85:EA:78:4C,3
 //
 // Input format, one line per command, from the website over serial:
@@ -107,7 +108,7 @@ typedef struct __attribute__((packed)) {
 // (volume, screen navigation, ...) and must never be able to produce a
 // badge-style EVT, which is what makes a press count as player/character
 // input in the website's game logic.
-typedef enum { ACTION_NONE, ACTION_VOLUME_UP, ACTION_VOLUME_DOWN, ACTION_NEXT } local_key_action_t;
+typedef enum { ACTION_NONE, ACTION_VOLUME_UP, ACTION_VOLUME_DOWN, ACTION_NEXT, ACTION_HOME } local_key_action_t;
 
 typedef struct {
     gpio_num_t pin;
@@ -116,7 +117,7 @@ typedef struct {
 } local_key_t;
 
 static const local_key_t LOCAL_KEYS[] = {
-    {GPIO_NUM_1, 1, ACTION_VOLUME_UP},  {GPIO_NUM_22, 4, ACTION_NONE},   {GPIO_NUM_16, 6, ACTION_NONE},
+    {GPIO_NUM_1, 1, ACTION_VOLUME_UP},  {GPIO_NUM_22, 4, ACTION_HOME},   {GPIO_NUM_16, 6, ACTION_NONE},
     {GPIO_NUM_17, 7, ACTION_NEXT},      {GPIO_NUM_19, 8, ACTION_NONE},   {GPIO_NUM_20, 9, ACTION_NONE},
     {GPIO_NUM_18, 10, ACTION_VOLUME_DOWN},
 };
@@ -124,10 +125,17 @@ static const local_key_t LOCAL_KEYS[] = {
 
 static bool s_local_stable[LOCAL_KEY_COUNT];
 static bool s_local_last_raw[LOCAL_KEY_COUNT];
+static uint32_t s_local_candidate_since[LOCAL_KEY_COUNT];
 static uint32_t s_local_press_start[LOCAL_KEY_COUNT];
 static uint32_t s_local_last_repeat[LOCAL_KEY_COUNT];
 static uint16_t s_local_seq = 0;
 static char s_local_source_id[18]; // "AA:BB:CC:DD:EE:FF\0"
+
+// A raw reading has to hold steady for this long before it's trusted as a
+// real transition, not contact bounce - some switches on this board (D4 in
+// particular) bounce badly enough that the old 1-poll (~10ms) debounce kept
+// re-triggering dozens of times a second for as long as it was held.
+#define DEBOUNCE_STABLE_MS 30
 
 // Chord: all 7 local switches held down at once toggles goose mode. Edge-
 // detected off the already-debounced s_local_stable[] states (checked after
@@ -290,6 +298,7 @@ void app_main(void) {
     for (size_t i = 0; i < LOCAL_KEY_COUNT; i++) {
         s_local_stable[i] = (gpio_get_level(LOCAL_KEYS[i].pin) == 0);
         s_local_last_raw[i] = s_local_stable[i];
+        s_local_candidate_since[i] = millis();
     }
     printf("[keys] %u local switches ready\n", (unsigned)LOCAL_KEY_COUNT);
 
@@ -298,11 +307,16 @@ void app_main(void) {
     while (true) {
         uint32_t now = millis();
 
-        // 2-sample debounce, same pattern as the badge firmware: only commit
-        // a transition once the raw reading has been stable for one full poll.
+        // Time-based debounce: a raw reading only commits as a real
+        // transition once it's held steady for DEBOUNCE_STABLE_MS, not just
+        // one poll - some switches on this board bounce for longer than a
+        // single ~10ms poll interval, which a 1-poll debounce can't catch.
         for (size_t i = 0; i < LOCAL_KEY_COUNT; i++) {
             bool raw = (gpio_get_level(LOCAL_KEYS[i].pin) == 0); // active-low
-            if (raw == s_local_last_raw[i] && raw != s_local_stable[i]) {
+            if (raw != s_local_last_raw[i]) {
+                s_local_last_raw[i] = raw;
+                s_local_candidate_since[i] = now;
+            } else if (raw != s_local_stable[i] && (now - s_local_candidate_since[i]) >= DEBOUNCE_STABLE_MS) {
                 s_local_stable[i] = raw;
                 if (raw) { // released -> pressed edge
                     s_local_press_start[i] = now;
@@ -321,6 +335,11 @@ void app_main(void) {
                             printf("NEXT,%u\n", s_local_seq);
                             printf("KEY,%u,%u\n", LOCAL_KEYS[i].d_pin, s_local_seq);
                             break;
+                        case ACTION_HOME:
+                            s_local_seq++;
+                            printf("HOME,%u\n", s_local_seq);
+                            printf("KEY,%u,%u\n", LOCAL_KEYS[i].d_pin, s_local_seq);
+                            break;
                         case ACTION_VOLUME_UP:
                         case ACTION_VOLUME_DOWN:
                             send_volume_event(&LOCAL_KEYS[i]);
@@ -328,7 +347,6 @@ void app_main(void) {
                     }
                 }
             }
-            s_local_last_raw[i] = raw;
 
             // Auto-repeat: only volume keys, and only once they've been held
             // past the initial delay, so a quick tap still produces exactly

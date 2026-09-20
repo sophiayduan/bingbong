@@ -97,6 +97,18 @@ class RhythmGame {
 		this.rafId = undefined;
 	}
 
+	// Clears every note off the board and every per-run stat (combos, miss
+	// streaks, feedback) - used when a run is abandoned mid-game (see the
+	// HOME chord in GameState.returnToStartScreen), not just when a chart
+	// naturally runs out.
+	reset() {
+		this.stop();
+		this.queues = new Map();
+		this.combos = new Map();
+		this.missStreaks = new Map();
+		this.feedback = new Map();
+	}
+
 	notesFor(player: number, column: Column): LiveNote[] {
 		return this.queues.get(player)?.get(column) ?? [];
 	}
