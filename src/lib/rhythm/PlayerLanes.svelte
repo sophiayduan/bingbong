@@ -2,11 +2,12 @@
 	import { rhythmGame, NOTE_TRAVEL_MS, NOTE_LINGER_MS } from './rhythm-state.svelte';
 	import type { Column } from './chart';
 
-	// laneHeightPx comes from the parent (PlayerCircles.svelte), which
-	// measures the shared lanes row once - every player's lane is the same
-	// height, and the hit bar is now one banner drawn there too, not per
-	// player, so there's nothing left for this component to measure itself.
-	let { player, laneHeightPx }: { player: number; laneHeightPx: number } = $props();
+	// laneHeightPx and barHeightPx come from the parent (PlayerCircles.svelte),
+	// which measures the shared lanes row and sizes the one shared hit bar -
+	// every player's lane uses those same two numbers, so there's nothing
+	// left for this component to measure or compute itself.
+	let { player, laneHeightPx, barHeightPx }: { player: number; laneHeightPx: number; barHeightPx: number } =
+		$props();
 
 	const COLUMNS: { key: Column }[] = [{ key: 'arrows' }, { key: 'ab' }];
 
@@ -26,6 +27,17 @@
 
 	function progressFor(noteTimeSec: number) {
 		return (rhythmGame.nowMs - (noteTimeSec * 1000 - NOTE_TRAVEL_MS)) / NOTE_TRAVEL_MS;
+	}
+
+	// progress === 1 is the instant a press would be judged "perfect" (see
+	// classify() in judgment.ts, centered on note.time). The hit bar is
+	// bottom-anchored, so without this offset that instant lands the note's
+	// center on the bar's bottom edge, not its middle - pulling every note's
+	// target up by half the bar's height puts the judged moment where the
+	// note visually looks centered in the bar, which is what actually
+	// reads as "on the beat".
+	function topPxFor(progress: number) {
+		return progress * laneHeightPx - barHeightPx / 2;
 	}
 
 	// A missed note stays fully dim while it falls past the bar and the
@@ -64,7 +76,7 @@
 					class="absolute h-14 w-14 transition-[transform,opacity,filter] duration-300 ease-out lg:h-22 lg:w-22 {isMiss
 						? 'grayscale'
 						: ''} {isHit ? 'hit-flash' : ''}"
-					style="top: {progress * laneHeightPx}px; left: calc(50% + {wobbleFor(
+					style="top: {topPxFor(progress)}px; left: calc(50% + {wobbleFor(
 						n.id,
 						progress
 					)}px); transform: translate(-50%, -50%) scale({burstScale}); opacity: {isMiss

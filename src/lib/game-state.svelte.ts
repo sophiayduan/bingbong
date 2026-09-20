@@ -175,28 +175,39 @@ class GameState {
 		osc.stop(now + duration);
 	}
 
-	// Sawtooth through a low lowpass, quick pluck decay - reads as a plucked
-	// electric bass string rather than a synth blip.
-	private playBassTone(freq: number, duration = 0.35) {
+	// Sawtooth dropped an octave (plus a sub-sine another octave below that
+	// for weight) through a tight lowpass - reads as a deep plucked electric
+	// bass string rather than a synth blip at the note's own register.
+	private playBassTone(freq: number, duration = 0.4) {
 		if (!this.audioCtx) return;
+		const bassFreq = freq / 2;
 		const osc = this.audioCtx.createOscillator();
+		const sub = this.audioCtx.createOscillator();
+		const subGain = this.audioCtx.createGain();
 		const filter = this.audioCtx.createBiquadFilter();
 		const gain = this.audioCtx.createGain();
 		osc.type = 'sawtooth';
-		osc.frequency.value = freq;
+		osc.frequency.value = bassFreq;
+		sub.type = 'sine';
+		sub.frequency.value = bassFreq / 2;
+		subGain.gain.value = 0.5;
 		filter.type = 'lowpass';
-		filter.frequency.value = 900;
-		filter.Q.value = 1;
+		filter.frequency.value = 500;
+		filter.Q.value = 1.2;
 
 		const now = this.audioCtx.currentTime;
-		const peak = Math.max(0.35 * this.volume, 0.0001);
+		const peak = Math.max(0.4 * this.volume, 0.0001);
 		gain.gain.setValueAtTime(0, now);
 		gain.gain.linearRampToValueAtTime(peak, now + 0.008);
 		gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
 
-		osc.connect(filter).connect(gain).connect(this.audioCtx.destination);
+		osc.connect(filter);
+		sub.connect(subGain).connect(filter);
+		filter.connect(gain).connect(this.audioCtx.destination);
 		osc.start(now);
+		sub.start(now);
 		osc.stop(now + duration);
+		sub.stop(now + duration);
 	}
 
 	// Sawtooth with a slow bowed attack, a bandpass tuned above the
@@ -256,15 +267,75 @@ class GameState {
 		osc.stop(now + duration);
 	}
 
+	// Recorded honk (see static/audio/honk-sound.mp3), decoded once and
+	// reused for every honk rather than re-fetched per press.
+	private static readonly HONK_AUDIO_URL = '/audio/honk-sound.mp3';
+	// The recording's own pitch is unknown, so this isn't its true
+	// fundamental - it's just the reference playbackRate=1 is measured
+	// against, picked as the geometric mean of the goose-register frequency
+	// range (the C major scale down an octave) so buttons pitch it roughly a
+	// half-octave up or down either side of the raw recording.
+	private static readonly HONK_REFERENCE_FREQ = 185;
+	private honkBuffer: AudioBuffer | null = null;
+	private honkBufferPromise: Promise<void> | null = null;
+
+	// Idempotent - safe to call on every honk; only actually fetches once.
+	private ensureHonkBufferLoaded() {
+		if (this.honkBuffer || this.honkBufferPromise || !this.audioCtx) return;
+		const ctx = this.audioCtx;
+		this.honkBufferPromise = fetch(GameState.HONK_AUDIO_URL)
+			.then((res) => res.arrayBuffer())
+			.then((data) => ctx.decodeAudioData(data))
+			.then((buffer) => {
+				this.honkBuffer = buffer;
+			})
+			.catch(() => {
+				// Failed to load/decode - honks just stay silent instead of
+				// throwing mid-game.
+			});
+	}
+
+	// Plays the recorded honk sample, pitched by playback rate so different
+	// buttons still honk at different pitches, and boosted well above every
+	// other sound in the game (including the background beat) - a honk
+	// should cut through everything else, not blend into it.
+	private playHonkSample(freq: number) {
+		if (!this.audioCtx) return;
+		this.ensureHonkBufferLoaded();
+		if (!this.honkBuffer) return; // still loading (or failed) - skip this one
+
+		const source = this.audioCtx.createBufferSource();
+		source.buffer = this.honkBuffer;
+		source.playbackRate.value = Math.max(0.5, Math.min(2.5, freq / GameState.HONK_REFERENCE_FREQ));
+
+		const gain = this.audioCtx.createGain();
+		const now = this.audioCtx.currentTime;
+		const peak = Math.min(2.5, Math.max(1.6 * this.volume, 0.0001));
+		gain.gain.setValueAtTime(0, now);
+		gain.gain.linearRampToValueAtTime(peak, now + 0.005);
+
+		source.connect(gain).connect(this.audioCtx.destination);
+		source.start(now);
+	}
+
 	// Picks the instrument voice by creature - see CREATURES for the
-	// index/name mapping (0 Cat, 1 Baby Chick, 2 Canada Goose, 3 Turkey).
-	// Baby Chick (and anyone not yet assigned a creature) keeps the original
-	// default tone.
+	// index/name mapping (0 Cat, 1 Baby Chick, 2 Canada Goose, 3 Turkey) and
+	// its pitchMultiplier, which shifts the played note to that creature's
+	// own register ("call"). freq is the raw scale-degree frequency, before
+	// any register shift, so this is the one place that multiplier gets
+	// applied. In goose mode every character honks instead, at the Canada
+	// Goose's own low-honk register regardless of whose button it is -
+	// matching the visual override in PlayerCircles.svelte that skins every
+	// slot as the goose.
 	private playCreatureTone(freq: number, creature: number | undefined) {
-		if (creature === 0) return this.playBassTone(freq); // Cat -> electric bass
-		if (creature === 2) return this.playViolinTone(freq); // Canada Goose -> violin
-		if (creature === 3) return this.playTrumpetTone(freq); // Turkey -> trumpet
-		this.playTone(freq); // Baby Chick -> default
+		if (this.gooseMode) {
+			return this.playHonkSample(freq * CREATURES[2].pitchMultiplier);
+		}
+		const pitch = creature !== undefined ? freq * CREATURES[creature].pitchMultiplier : freq;
+		if (creature === 0) return this.playBassTone(pitch); // Cat -> electric bass
+		if (creature === 2) return this.playViolinTone(pitch); // Canada Goose -> violin
+		if (creature === 3) return this.playTrumpetTone(pitch); // Turkey -> trumpet
+		this.playTone(pitch); // Baby Chick -> default
 	}
 
 	// Seconds on the same clock chart note times and press timestamps are
@@ -523,6 +594,9 @@ class GameState {
 			this.nextRequested++;
 		} else if (line.startsWith('GOOSE,')) {
 			this.gooseMode = !this.gooseMode;
+			// Kick off the fetch/decode as soon as goose mode turns on, so
+			// it's ready by the time anyone actually presses a button.
+			if (this.gooseMode) this.ensureHonkBufferLoaded();
 		}
 	}
 
@@ -573,10 +647,10 @@ class GameState {
 		// flash, no scoring, so an early mash can't sneak in before play starts.
 		if (this.countingDown) return;
 
-		// Button picks the scale degree as always; creature (if assigned yet)
-		// shifts that note's register up/down to its own "call".
+		// Button picks the scale degree as always; playCreatureTone shifts that
+		// note's register up/down to the creature's own "call" (or, in goose
+		// mode, to the goose's call regardless of whose button this is).
 		const { note, freq } = noteForButton(button);
-		const pitch = creature !== undefined ? freq * CREATURES[creature].pitchMultiplier : freq;
 
 		const entry: ButtonPress = {
 			id: this.nextEventId++,
@@ -589,7 +663,7 @@ class GameState {
 		};
 
 		this.events = [entry, ...this.events].slice(0, 50);
-		this.playCreatureTone(pitch, creature);
+		this.playCreatureTone(freq, creature);
 
 		if (this.hasStartedPlay) {
 			rhythmGame.tryHit(entry.player, button, this.now());

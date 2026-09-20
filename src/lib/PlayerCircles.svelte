@@ -153,7 +153,7 @@
 
 			{#each PLAYER_COLORS as _, i (i)}
 				<div class="relative flex h-full w-50 shrink-0 lg:w-90">
-					<PlayerLanes player={i + 1} {laneHeightPx} />
+					<PlayerLanes player={i + 1} {laneHeightPx} {barHeightPx} />
 				</div>
 			{/each}
 		</div>
