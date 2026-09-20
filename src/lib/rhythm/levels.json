@@ -1,0 +1,23 @@
+[
+	{
+		"id": "normal",
+		"name": "Normal",
+		"burstSizes": [3, 3, 6],
+		"cycles": 2,
+		"lastNoteCutoffS": 19.5
+	},
+	{
+		"id": "fast",
+		"name": "Fast",
+		"burstSizes": [3, 3, 10],
+		"cycles": 2,
+		"lastNoteCutoffS": 19.5
+	},
+	{
+		"id": "faster",
+		"name": "Faster",
+		"burstSizes": [3, 3, 14],
+		"cycles": 2,
+		"lastNoteCutoffS": 19.5
+	}
+]

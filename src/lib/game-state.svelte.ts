@@ -155,7 +155,7 @@ class GameState {
 	private beatNextStepTime = 0;
 	private noiseBufferCache: AudioBuffer | null = null;
 
-	private playTone(freq: number, duration = 0.4) {
+	private playTone(freq: number, duration = 0.4, peakLevel = 0.3) {
 		if (!this.audioCtx) return;
 		const osc = this.audioCtx.createOscillator();
 		const gain = this.audioCtx.createGain();
@@ -165,7 +165,7 @@ class GameState {
 		const now = this.audioCtx.currentTime;
 		// exponentialRampToValueAtTime throws if it ramps from exactly 0, so the
 		// peak floors at 0.0001 (effectively silent at volume 0) rather than 0.
-		const peak = Math.max(0.3 * this.volume, 0.0001);
+		const peak = Math.max(peakLevel * this.volume, 0.0001);
 		gain.gain.setValueAtTime(0, now);
 		gain.gain.linearRampToValueAtTime(peak, now + 0.01);
 		gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
@@ -196,7 +196,10 @@ class GameState {
 		filter.Q.value = 1.2;
 
 		const now = this.audioCtx.currentTime;
-		const peak = Math.max(0.4 * this.volume, 0.0001);
+		// Character voices are pitched well above the background beat's
+		// loudest component (the kick, at 0.6 * volume) - presses should
+		// always read clearly over the beat, not blend into it.
+		const peak = Math.max(1.4 * this.volume, 0.0001);
 		gain.gain.setValueAtTime(0, now);
 		gain.gain.linearRampToValueAtTime(peak, now + 0.008);
 		gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
@@ -231,7 +234,9 @@ class GameState {
 		filter.Q.value = 3;
 
 		const now = this.audioCtx.currentTime;
-		const peak = Math.max(0.28 * this.volume, 0.0001);
+		// Character voices are pitched well above the background beat's
+		// loudest component (the kick, at 0.6 * volume).
+		const peak = Math.max(1.2 * this.volume, 0.0001);
 		gain.gain.setValueAtTime(0, now);
 		gain.gain.linearRampToValueAtTime(peak, now + 0.08);
 		gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
@@ -257,7 +262,9 @@ class GameState {
 		filter.Q.value = 6;
 
 		const now = this.audioCtx.currentTime;
-		const peak = Math.max(0.3 * this.volume, 0.0001);
+		// Character voices are pitched well above the background beat's
+		// loudest component (the kick, at 0.6 * volume).
+		const peak = Math.max(1.3 * this.volume, 0.0001);
 		gain.gain.setValueAtTime(0, now);
 		gain.gain.linearRampToValueAtTime(peak, now + 0.015);
 		gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
@@ -335,7 +342,11 @@ class GameState {
 		if (creature === 0) return this.playBassTone(pitch); // Cat -> electric bass
 		if (creature === 2) return this.playViolinTone(pitch); // Canada Goose -> violin
 		if (creature === 3) return this.playTrumpetTone(pitch); // Turkey -> trumpet
-		this.playTone(pitch); // Baby Chick -> default
+		// Baby Chick -> default tone, boosted above the background beat like
+		// every other character voice (playTone's own default peak is left
+		// alone since playCountdownTick/playGoSound also use it, before the
+		// beat is even playing).
+		this.playTone(pitch, 0.4, 1.3);
 	}
 
 	// Seconds on the same clock chart note times and press timestamps are
