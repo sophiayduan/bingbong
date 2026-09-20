@@ -1,28 +1,11 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { gsap } from 'gsap';
+	import { fade } from 'svelte/transition';
 	import { gameState, PLAYER_COLORS } from '$lib/game-state.svelte';
-	import cat from '$lib/images/cat.webp';
-	import catBing from '$lib/images/cat-bing.webp';
-	import catWin1 from '$lib/images/cat-win1.webp';
-	import catWin2 from '$lib/images/cat-win2.webp';
-	import catLose1 from '$lib/images/cat-lose1.webp';
-	import catLose2 from '$lib/images/cat-lose2.webp';
-	import chick from '$lib/images/chick.webp';
-	import chickBing from '$lib/images/chick-bing.webp';
-	import chickWin1 from '$lib/images/chick-win1.webp';
-	import chickWin2 from '$lib/images/chick-win2.webp';
-	import chickLose1 from '$lib/images/chick-lose1.webp';
-	import chickLose2 from '$lib/images/chick-lose2.webp';
+	import { SLOTS } from '$lib/creature-slots';
 	import goose from '$lib/images/goose.webp';
 	import gooseBing from '$lib/images/goose-bing.webp';
-	import gooseLose1 from '$lib/images/goose-lose1.webp';
-	import gooseLose2 from '$lib/images/goose-lose2.webp';
-	import ostridge from '$lib/images/ostridge.webp';
-	import ostridgeBing from '$lib/images/ostridge-bing.webp';
-	import ostridgeWin1 from '$lib/images/ostridge-win1.webp';
-	import ostridgeWin2 from '$lib/images/ostridge-win2.webp';
-	import ostridgeLose1 from '$lib/images/ostridge-lose1.webp';
-	import ostridgeLose2 from '$lib/images/ostridge-lose2.webp';
 	import fire1 from '$lib/images/fire-1.webp';
 	import fire2 from '$lib/images/fire-2.webp';
 	import PlayerLanes from '$lib/rhythm/PlayerLanes.svelte';
@@ -32,43 +15,6 @@
 		hitBarHeightPx
 	} from '$lib/rhythm/rhythm-state.svelte';
 	import { devInput } from '$lib/dev-input.svelte';
-
-	// Fixed per slot, forever - a slot's name, sprite and creature never
-	// change no matter who connects or disconnects (see handleHello in
-	// game-state.svelte.ts: creature is always player number - 1, i.e. this
-	// same slot index). The sprite order below is NOT cosmetic - it has to
-	// match CREATURES in game-state.svelte.ts (0 Cat, 1 Baby Chick,
-	// 2 Canada Goose, 3 Turkey) exactly, since that's the same id the badge
-	// uses to pick which name it draws on its own screen. There's no turkey
-	// asset, so Turkey borrows the ostrich art. The `name` label is purely
-	// decorative and doesn't need to match the sprite.
-	// win/lose are each a 2-frame pair, alternated the same way as the fire
-	// glow (see sprite-alt-a/b below). Ping/goose only has one drawn pair
-	// (the lose frames), so win reuses it too.
-	const SLOTS = [
-		{ name: 'Bing', normal: cat, bing: catBing, win: [catWin1, catWin2], lose: [catLose1, catLose2] },
-		{
-			name: 'Bong',
-			normal: chick,
-			bing: chickBing,
-			win: [chickWin1, chickWin2],
-			lose: [chickLose1, chickLose2]
-		},
-		{
-			name: 'Ping',
-			normal: goose,
-			bing: gooseBing,
-			win: [gooseLose1, gooseLose2],
-			lose: [gooseLose1, gooseLose2]
-		},
-		{
-			name: 'Pong',
-			normal: ostridge,
-			bing: ostridgeBing,
-			win: [ostridgeWin1, ostridgeWin2],
-			lose: [ostridgeLose1, ostridgeLose2]
-		}
-	];
 
 	// Goose mode: every slot shows the goose sprite instead of its own, tinted
 	// with a solid-color silhouette (via mask-image on the same sprite, so the
@@ -140,7 +86,81 @@
 	// misses in a row (tracked separately from combo - see missStreaks)
 	// swaps it to the lose sprite instead. Both are easy to retune.
 	const WIN_COMBO_THRESHOLD = 15;
-	const LOSE_STREAK_THRESHOLD = 4;
+	const LOSE_STREAK_THRESHOLD = 6;
+
+	// Highest final score once the match is over - used to decide who gets
+	// the win treatment on the results view (see isWinning below). 0 outside
+	// of matchOver since nobody's reading it then.
+	const finalTopScore = $derived(
+		gameState.matchOver
+			? Math.max(0, ...PLAYER_COLORS.map((_, i) => gameState.scores.get(i + 1) ?? 0))
+			: 0
+	);
+
+	// Everything but the winner reads as one dark vignette (see the overlay
+	// markup below) with a hole punched over their circle - measured in real
+	// px off the DOM rather than derived from flex-layout math, so it lines
+	// up exactly regardless of viewport size or how the row happens to be
+	// spaced. Only the first winner is spotlit on a tie (rare with the
+	// placeholder charts, and every winner still gets the big/looping
+	// treatment either way - just not literally lit).
+	let circleEls: (HTMLElement | undefined)[] = $state([]);
+	let spotlight = $state<{
+		x: number;
+		topHalf: number;
+		poolCy: number;
+		poolRx: number;
+		poolRy: number;
+	} | null>(null);
+
+	// Bottom of the light pool never gets closer than this to the actual
+	// bottom of the viewport, however big the winner's (scaled-up) circle
+	// ends up being - this is what keeps the beam ending "before the bottom
+	// of the page" instead of running the oval off the edge.
+	const POOL_BOTTOM_MARGIN_PX = 40;
+
+	function measureSpotlight() {
+		if (!gameState.matchOver || finalTopScore <= 0) {
+			spotlight = null;
+			return;
+		}
+		const winnerIndex = PLAYER_COLORS.findIndex(
+			(_, i) => (gameState.scores.get(i + 1) ?? 0) === finalTopScore
+		);
+		const el = circleEls[winnerIndex];
+		if (!el) return;
+		const rect = el.getBoundingClientRect();
+		const cx = rect.left + rect.width / 2;
+		const cy = rect.top + rect.height / 2;
+		const r = Math.max(rect.width, rect.height) / 2;
+		const poolRx = r * 1.1;
+		const poolRy = poolRx * 0.32;
+		spotlight = {
+			x: cx,
+			topHalf: r * 0.45,
+			poolRx,
+			poolRy,
+			poolCy: Math.min(cy + r * 0.25, window.innerHeight - poolRy - POOL_BOTTOM_MARGIN_PX)
+		};
+	}
+
+	$effect(() => {
+		// Re-measure whenever the match-over/score state changes, and once
+		// more shortly after - the winner's circle is still mid-grow (see
+		// circleScale's transition, 300ms) at the instant matchOver flips, so
+		// an immediate measurement would size the hole to its pre-grow rect.
+		void gameState.matchOver;
+		void finalTopScore;
+		measureSpotlight();
+		if (!gameState.matchOver) return;
+		const t = setTimeout(measureSpotlight, 350);
+		return () => clearTimeout(t);
+	});
+
+	onMount(() => {
+		window.addEventListener('resize', measureSpotlight);
+		return () => window.removeEventListener('resize', measureSpotlight);
+	});
 	$effect(() => {
 		for (let i = 0; i < PLAYER_COLORS.length; i++) {
 			const combo = rhythmGame.combos.get(i + 1) ?? 0;
@@ -193,25 +213,43 @@
 	{/each}
 </svelte:head>
 
-<div class="select-none mx-auto flex w-full flex-col important {gameState.hasStartedPlay ? 'h-full' : 'h-auto'}">
+<div class="select-none mx-auto flex w-full flex-col items-center important {gameState.hasStartedPlay ? 'h-full' : 'h-auto'}">
 	{#if gameState.hasStartedPlay}
 		<div
-			class="relative flex w-full flex-1 min-h-0 justify-center -space-x-4"
+			class="relative flex w-full flex-1 min-h-0 justify-center"
 			bind:clientHeight={laneHeightPx}
 		>
 			<!-- Drawn before the note columns below so it stays behind them in
 			     the stacking order - a falling note should read as passing in
-			     front of the bar, not sliding underneath it. -->
+			     front of the bar, not sliding underneath it. -inset-x-14 +
+			     the mask-image gradient let the bar bleed a bit past the lanes
+			     and fade out at its own edges rather than ending in a hard cut.
+			     Once the match is over there's nothing left to hit, so it
+			     fades/slides up out of the way instead of just sitting there
+			     behind the win/lose sprites - and slides back in on its own
+			     when the next level's countdown flips matchOver back off. -->
 			<div
-				class="pointer-events-none absolute inset-x-0"
-				style="bottom: {HIT_LINE_INSET_PX}px; height: {barHeightPx}px; background: color-mix(in srgb, var(--color-dark-blue) 35%, transparent); border-top: 3px solid var(--color-dark-blue); border-bottom: 3px solid var(--color-dark-blue);"
+				class="pointer-events-none absolute -inset-x-14 transition-all duration-500 ease-in-out {gameState.matchOver
+					? '-translate-y-6 opacity-0'
+					: 'translate-y-0 opacity-100'}"
+				style="bottom: {HIT_LINE_INSET_PX}px; height: {barHeightPx}px; background: color-mix(in srgb, var(--color-dark-blue) 35%, transparent); border-top: 3px solid var(--color-dark-blue); border-bottom: 3px solid var(--color-dark-blue); mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent); -webkit-mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent);"
 			></div>
 
-			{#each PLAYER_COLORS as _, i (i)}
-				<div class="relative flex h-full w-50 shrink-0 lg:w-90">
-					<PlayerLanes player={i + 1} {laneHeightPx} {barHeightPx} />
-				</div>
-			{/each}
+			<!-- Own flex wrapper so -space-x-4 only ever sees the 4 lane divs
+			     as siblings - the hit bar above is a DOM sibling too (even
+			     though it's position:absolute and takes no layout space), and
+			     Tailwind's space-x selector (> * + *) counts DOM order, not
+			     layout participation. Left in the same flow as the hit bar,
+			     player 1's lane was picking up a -space-x-4 margin the
+			     character row below never applies to player 1, pushing every
+			     lane out of alignment with its own character. -->
+			<div class="relative flex h-full justify-center -space-x-4">
+				{#each PLAYER_COLORS as _, i (i)}
+					<div class="relative flex h-full w-50 shrink-0 justify-center lg:w-90">
+						<PlayerLanes player={i + 1} {laneHeightPx} {barHeightPx} />
+					</div>
+				{/each}
+			</div>
 		</div>
 	{/if}
 
@@ -230,8 +268,24 @@
 			{@const isDevSelected = import.meta.env.DEV && devInput.selectedPlayer === i + 1}
 			{@const combo = gameState.hasStartedPlay ? (rhythmGame.combos.get(i + 1) ?? 0) : 0}
 			{@const missStreak = gameState.hasStartedPlay ? (rhythmGame.missStreaks.get(i + 1) ?? 0) : 0}
-			{@const isWinning = combo >= WIN_COMBO_THRESHOLD}
-			{@const isLosing = !isWinning && missStreak >= LOSE_STREAK_THRESHOLD}
+			{@const score = gameState.scores.get(i + 1) ?? 0}
+			<!-- Once the match is over, win/lose reads off the final score
+			     instead of the live combo/miss-streak - the same sprite swap
+			     the round already used, now judging the round instead of the
+			     moment. Ties all get the win treatment together. -->
+			{@const isWinning = gameState.matchOver
+				? finalTopScore > 0 && score === finalTopScore
+				: combo >= WIN_COMBO_THRESHOLD}
+			{@const isLosing = gameState.matchOver
+				? !isWinning
+				: !isWinning && missStreak >= LOSE_STREAK_THRESHOLD}
+			{@const circleScale = gameState.matchOver
+				? isWinning
+					? 'scale-150'
+					: 'scale-90'
+				: p?.flash
+					? 'scale-110'
+					: 'scale-100'}
 			{@const sprite = gameState.gooseMode
 				? p?.flash
 					? gooseBing
@@ -268,13 +322,18 @@
 						</div>
 					{/if}
 					<div
-						class="relative flex h-full w-full items-center justify-center overflow-hidden rounded-full transition-transform duration-150 {p?.flash
-							? 'scale-110'
-							: 'scale-100'} {p || isDevSelected ? '' : 'grayscale group-hover:grayscale-0  group-hover:scale-110 p-2 group-hover:-translate-y-6'}"
+						bind:this={circleEls[i]}
+						class="relative flex h-full w-full items-center justify-center overflow-hidden rounded-full transition-transform duration-300 {circleScale} {p ||
+						isDevSelected
+							? ''
+							: 'grayscale group-hover:grayscale-0  group-hover:scale-110 p-2 group-hover:-translate-y-6'}"
 					>
 						{#if isWinning}
-							<img src={slot.win[0]} alt="" class="sprite-once-a absolute inset-0 h-full w-full object-cover" />
-							<img src={slot.win[1]} alt="" class="sprite-once-b absolute inset-0 h-full w-full object-cover" />
+							<!-- Loops (sprite-alt-a/b) rather than flapping once and
+							     holding - a winner keeps celebrating for as long as
+							     it's shown, unlike the one-shot lose pose below. -->
+							<img src={slot.win[0]} alt="" class="sprite-alt-a absolute inset-0 h-full w-full object-cover" />
+							<img src={slot.win[1]} alt="" class="sprite-alt-b absolute inset-0 h-full w-full object-cover" />
 						{:else if isLosing}
 							<img src={slot.lose[0]} alt="" class="sprite-once-a absolute inset-0 h-full w-full object-cover" />
 							<img src={slot.lose[1]} alt="" class="sprite-once-b absolute inset-0 h-full w-full object-cover" />
@@ -299,7 +358,6 @@
 						{/each}
 					</p>
 					{#if gameState.hasStartedPlay}
-						{@const score = gameState.scores.get(i + 1) ?? 0}
 						<div class="flex items-baseline gap-1.5">
 							<p
 								bind:this={scoreEls[i]}
@@ -325,6 +383,35 @@
 		{/each}
 	</div>
 </div>
+
+{#if spotlight}
+	<!-- A hard-edged yellow beam straight down from the top of the screen,
+	     ending in a flattened oval pool of light rather than running to the
+	     bottom of the page or cutting off in a flat line - the classic
+	     cartoon-spotlight shape. Traced as one outline (trapezoid sides
+	     into a half-ellipse arc for the pool) so it can be reused as a
+	     single clip-path for the yellow beam fill and, prefixed with a
+	     giant rectangle under an evenodd rule, as the hole punched in the
+	     dark scrim over everything else - no soft gradient anywhere, so
+	     every edge stays sharp. Both clear the ground layer (z-10 in
+	     +layout.svelte) and this component's own character row (z-20).
+	     The clip-path transition (on top of the fade-in/out) is what makes
+	     the beam widen/settle into place smoothly instead of snapping when
+	     measureSpotlight's re-measure (after the winner's grow animation
+	     finishes) updates these numbers mid-reveal. -->
+	{@const beamShape = `M ${spotlight.x - spotlight.topHalf} 0 L ${spotlight.x + spotlight.topHalf} 0 L ${spotlight.x + spotlight.poolRx} ${spotlight.poolCy} A ${spotlight.poolRx} ${spotlight.poolRy} 0 0 1 ${spotlight.x - spotlight.poolRx} ${spotlight.poolCy} Z`}
+
+	<div
+		transition:fade={{ duration: 500 }}
+		class="pointer-events-none fixed inset-0 z-[24] transition-[clip-path] duration-500 ease-out"
+		style="background: rgba(255, 214, 102, 0.4); clip-path: path('{beamShape}');"
+	></div>
+	<div
+		transition:fade={{ duration: 500 }}
+		class="pointer-events-none fixed inset-0 z-[25] transition-[clip-path] duration-500 ease-out"
+		style="background: rgba(10, 12, 20, 0.5); clip-path: path(evenodd, 'M -4000 -4000 H 4000 V 4000 H -4000 Z {beamShape}');"
+	></div>
+{/if}
 
 <style>
 	/* Generic hard-cut alternation (steps, not a crossfade) between two

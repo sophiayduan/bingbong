@@ -14,6 +14,7 @@
 	import { gameState, supported } from '$lib/game-state.svelte';
 	import Countdown from '$lib/Countdown.svelte';
 	import MatchTimer from '$lib/MatchTimer.svelte';
+	import ResultsScreen from '$lib/ResultsScreen.svelte';
 	import DevKeyboardInput from '$lib/DevKeyboardInput.svelte';
 
 	let { children } = $props();
@@ -224,6 +225,7 @@
 
 <Countdown />
 <MatchTimer />
+<ResultsScreen />
 {#if import.meta.env.DEV}
 	<DevKeyboardInput />
 {/if}

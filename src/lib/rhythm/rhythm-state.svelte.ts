@@ -37,6 +37,17 @@ export function hitLineCenterPx(laneHeightPx: number) {
 const MAX_MULTIPLIER = 4;
 const COMBO_PER_MULTIPLIER_STEP = 10;
 
+// One-shot callouts as a combo crosses these exact thresholds - separate
+// from the per-hit PERFECT/GOOD/MISS feedback (see `feedback` below) so a
+// milestone can pop bigger and linger longer without racing the next hit's
+// text.
+const MILESTONES: { at: number; text: string }[] = [
+	{ at: 10, text: 'ON FIRE!' },
+	{ at: 20, text: 'UNSTOPPABLE!' },
+	{ at: 30, text: 'LEGENDARY!' }
+];
+const MILESTONE_DISPLAY_MS = 900;
+
 // A missed note stays on screen this much longer after MISS_WINDOW_MS so it
 // visually keeps falling - past the hit bar, behind the characters, and
 // off the bottom of the screen (see layout.css's ground layer) - instead of
@@ -64,16 +75,25 @@ class RhythmGame {
 	nowMs = $state(0);
 	queues = $state<Map<number, Map<Column, LiveNote[]>>>(new Map());
 	combos = $state<Map<number, number>>(new Map());
+	// Highest combo each player reached, kept even after a miss resets
+	// `combos` back to 0 - the results screen reads this once the round
+	// ends, so it can't just be derived from the live (already-reset) combo.
+	maxCombos = $state<Map<number, number>>(new Map());
 	// Consecutive misses, separate from combo - combo already resets to 0 on
 	// the first miss, so it can't tell "just whiffed one" from "on a bad
 	// streak". Reset by any hit, not just a perfect one (see registerHit).
 	missStreaks = $state<Map<number, number>>(new Map());
 	feedback = $state<Map<number, Feedback>>(new Map());
+	// Combo-milestone callouts (see MILESTONES) - separate map from
+	// `feedback` so a milestone's longer-lived banner never gets clobbered
+	// by the very next hit's PERFECT/GOOD text.
+	milestoneFeedback = $state<Map<number, Feedback>>(new Map());
 
 	private nextNoteId = 0;
 	private rafId: number | undefined;
 	private songStart = 0;
 	private feedbackTimeouts = new Map<number, ReturnType<typeof setTimeout>>();
+	private milestoneTimeouts = new Map<number, ReturnType<typeof setTimeout>>();
 
 	start(chart: ChartNote[]) {
 		this.stop();
@@ -87,8 +107,10 @@ class RhythmGame {
 		}
 		this.queues = queues;
 		this.combos = new Map();
+		this.maxCombos = new Map();
 		this.missStreaks = new Map();
 		this.feedback = new Map();
+		this.milestoneFeedback = new Map();
 		this.tick();
 	}
 
@@ -113,19 +135,18 @@ class RhythmGame {
 		return this.queues.get(player)?.get(column) ?? [];
 	}
 
-	// A press with nothing in range for that column is ignored outright - no
-	// penalty, no combo break. Badge latency makes "wrong time" presses
-	// common, and harmless mashing between notes shouldn't feel punishing.
+	// A press with nothing in range for that column counts as a whiff - same
+	// as a note falling through unhit - so mashing outside the window can't
+	// dodge a combo break by just not hitting anything.
 	tryHit(player: number, button: string, pressAudioSeconds: number) {
 		const column = columnForButton(button);
 		if (!column) return;
 		const queue = this.queues.get(player)?.get(column);
-		if (!queue || queue.length === 0) return;
 
 		const pressMs = (pressAudioSeconds - this.songStart) * 1000;
 		let bestIndex = -1;
 		let bestDelta = Infinity;
-		queue.forEach((note, index) => {
+		queue?.forEach((note, index) => {
 			// Already-resolved notes (hit or auto-missed) are just lingering
 			// for their fade/fall-off animation - not eligible to be hit again.
 			if (note.button !== button || note.resolved) return;
@@ -135,7 +156,10 @@ class RhythmGame {
 				bestIndex = index;
 			}
 		});
-		if (bestIndex === -1 || Math.abs(bestDelta) > MISS_WINDOW_MS) return;
+		if (bestIndex === -1 || Math.abs(bestDelta) > MISS_WINDOW_MS) {
+			this.registerMiss(player);
+			return;
+		}
 
 		// Replaces the note object rather than mutating it in place - it's a
 		// plain object, not a $state itself, so a mutated property is
@@ -143,8 +167,8 @@ class RhythmGame {
 		// after `queues` is reassigned below. A new object for this id is
 		// what actually makes the resolved state (and its styling) show up.
 		const judgment = classify(bestDelta);
-		const nextQueue = queue.slice();
-		nextQueue[bestIndex] = { ...queue[bestIndex], resolved: judgment, resolvedAtMs: this.nowMs };
+		const nextQueue = queue!.slice();
+		nextQueue[bestIndex] = { ...queue![bestIndex], resolved: judgment, resolvedAtMs: this.nowMs };
 		const nextColumns = new Map(this.queues.get(player));
 		nextColumns.set(column, nextQueue);
 		const nextQueues = new Map(this.queues);
@@ -162,9 +186,18 @@ class RhythmGame {
 		nextCombos.set(player, combo);
 		this.combos = nextCombos;
 
+		if (combo > (this.maxCombos.get(player) ?? 0)) {
+			const nextMax = new Map(this.maxCombos);
+			nextMax.set(player, combo);
+			this.maxCombos = nextMax;
+		}
+
 		const multiplier = Math.min(MAX_MULTIPLIER, 1 + Math.floor(combo / COMBO_PER_MULTIPLIER_STEP));
 		gameState.awardPoints(player, POINTS[judgment] * multiplier);
 		this.showFeedback(player, judgment === 'perfect' ? 'PERFECT' : 'GOOD');
+
+		const milestone = MILESTONES.find((m) => m.at === combo);
+		if (milestone) this.showMilestone(player, milestone.text);
 	}
 
 	private tick = () => {
@@ -265,6 +298,21 @@ class RhythmGame {
 				cleared.delete(player);
 				this.feedback = cleared;
 			}, 500)
+		);
+	}
+
+	private showMilestone(player: number, text: string) {
+		const next = new Map(this.milestoneFeedback);
+		next.set(player, { text, id: Math.random() });
+		this.milestoneFeedback = next;
+		clearTimeout(this.milestoneTimeouts.get(player));
+		this.milestoneTimeouts.set(
+			player,
+			setTimeout(() => {
+				const cleared = new Map(this.milestoneFeedback);
+				cleared.delete(player);
+				this.milestoneFeedback = cleared;
+			}, MILESTONE_DISPLAY_MS)
 		);
 	}
 }
