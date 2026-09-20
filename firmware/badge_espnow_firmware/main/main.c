@@ -25,6 +25,7 @@
 #include "driver/gpio.h"
 #include "accel.h"
 #include "lcd.h"
+#include "led.h"
 #include "creature_banners.h"
 
 static const char *TAG = "badge_espnow";
@@ -115,6 +116,7 @@ static uint16_t s_accel_seq = 0;
 static uint16_t s_hello_seq = 0;
 
 static esp_lcd_panel_handle_t s_panel;
+static led_strip_handle_t s_led_strip;
 static volatile bool s_assigned = false;
 // Set the instant a button on THIS badge is pressed, entirely locally - no
 // server round trip needed, unlike s_assigned. Read from onEspNowRecv (the
@@ -129,6 +131,17 @@ static volatile uint8_t s_creature = 0;
 static uint32_t s_loop_count = 0;
 // Loop count of the last thing sent (button or HELLO)
 static uint32_t s_last_send_loop = 0;
+// Loop count of the last ASSIGN received (written from onEspNowRecv, read
+// from the poll loop) - a plain uint32_t is fine, same reasoning as the other
+// cross-task fields above. Used to detect the link going quiet, independent
+// of the server's own DISCONNECT_AFTER_MS (see checkLiveness in
+// src/lib/game-state.svelte.ts) since the badge has no way to learn that
+// directly - it can only notice its own pings stopped getting answered.
+static volatile uint32_t s_last_assign_recv_loop = 0;
+static bool s_connected = false;
+// 2 missed ~1s idle pings (see IDLE_PING_LOOPS) - enough margin to not
+// false-positive on a single dropped packet.
+#define CONNECTION_TIMEOUT_LOOPS (IDLE_PING_LOOPS * 2)
 
 static void hc165_gpio_init(void) {
     gpio_config_t data_cfg = {
@@ -192,6 +205,7 @@ static void send_button(button_id_t id) {
     if (s_assigned && !s_joined) {
         s_joined = true;
         lcd_draw_creature_screen(s_panel, s_creature);
+        led_flash_creature(s_led_strip, s_creature);
     }
 }
 
@@ -242,6 +256,8 @@ static void onEspNowRecv(const esp_now_recv_info_t *info, const uint8_t *data, i
         ESP_LOGW(TAG, "ignoring ASSIGN with out-of-range creature %u", msg->creature);
         return;
     }
+
+    s_last_assign_recv_loop = s_loop_count;
 
     ESP_LOGI(TAG, "ASSIGN recv: creature=%u (was assigned=%d joined=%d)", msg->creature, s_assigned, s_joined);
     // The server resends the same ASSIGN on every idle HELLO ping (every ~3s
@@ -304,6 +320,7 @@ void app_main(void) {
 
     s_panel = lcd_init();
     lcd_draw_banner(s_panel, system_bingbong_banner, "bingbong (boot)");
+    s_led_strip = led_init();
 
     bool raw[8], stable[8], last_raw[8];
     hc165_read(stable);
@@ -346,6 +363,14 @@ void app_main(void) {
                 lcd_draw_banner(s_panel, system_press_to_join_banner, "press-to-join");
             } else {
                 lcd_draw_creature_screen(s_panel, s_creature);
+            }
+        }
+
+        if (s_assigned) {
+            bool link_alive = (s_loop_count - s_last_assign_recv_loop) < CONNECTION_TIMEOUT_LOOPS;
+            if (link_alive != s_connected) {
+                s_connected = link_alive;
+                led_flash_connection(s_led_strip, s_connected);
             }
         }
 
