@@ -127,6 +127,53 @@ esp_lcd_panel_handle_t lcd_init(void) {
     return panel;
 }
 
+static int rows_per_chunk(int w) {
+    int rows = (BAND_ROWS * LCD_H_RES) / w;
+    return rows > 0 ? rows : 1;
+}
+
+// Background is packed BG_BITS_PER_PIXEL bits/pixel, MSB-first, byte-aligned
+// per row (see gen_creature_screens.py's pack_bits() - BG_WIDTH *
+// BG_BITS_PER_PIXEL is always a whole number of bytes, so a row never leaves
+// a partial byte hanging for the next row to pick up). A pixel can still
+// straddle a byte boundary within its own row; reading a 2-byte window and
+// shifting covers that without needing a per-pixel branch. The bounds check
+// on the second byte only matters for a row's last pixel(s), which for
+// 3bpp/320-wide never actually crosses (960 bits divides into whole 3-byte
+// groups), but the check keeps this correct for other widths/bit depths too.
+static uint8_t read_bg_pixel_index(const uint8_t *row_bytes, int col) {
+    int bit_offset = col * BG_BITS_PER_PIXEL;
+    int byte_index = bit_offset / 8;
+    int bit_in_byte = bit_offset % 8;
+    uint16_t window = (uint16_t)row_bytes[byte_index] << 8;
+    if (byte_index + 1 < BG_BYTES_PER_ROW) window |= row_bytes[byte_index + 1];
+    return (window >> (16 - bit_in_byte - BG_BITS_PER_PIXEL)) & ((1 << BG_BITS_PER_PIXEL) - 1);
+}
+
+// Samples the shared background at an absolute screen coordinate - used to
+// fill in a sprite's transparent pixels so it sits "on" the background
+// instead of a solid box.
+static uint16_t background_pixel_at(int x, int y) {
+    const uint8_t *row_bytes = &background_image.pixels[y * BG_BYTES_PER_ROW];
+    return background_image.palette[read_bg_pixel_index(row_bytes, x)];
+}
+
+static void draw_background(esp_lcd_panel_handle_t panel) {
+    int chunk = rows_per_chunk(BG_WIDTH);
+    for (int y0 = 0; y0 < BG_HEIGHT; y0 += chunk) {
+        int rows = BG_HEIGHT - y0;
+        if (rows > chunk) rows = chunk;
+        for (int row = 0; row < rows; row++) {
+            const uint8_t *row_bytes = &background_image.pixels[(y0 + row) * BG_BYTES_PER_ROW];
+            uint16_t *row_pixels = &s_band[row * BG_WIDTH];
+            for (int col = 0; col < BG_WIDTH; col++) {
+                row_pixels[col] = background_image.palette[read_bg_pixel_index(row_bytes, col)];
+            }
+        }
+        draw_rect_band(panel, 0, y0, BG_WIDTH, rows);
+    }
+}
+
 static void fill_white(esp_lcd_panel_handle_t panel, int y0, int y1) {
     int y = y0;
     while (y < y1) {
@@ -187,41 +234,6 @@ void lcd_draw_banner(esp_lcd_panel_handle_t panel, const uint8_t *banner, const 
 #define SPRITE_X 10
 #define SPRITE_Y ((LCD_V_RES - SPRITE_HEIGHT) / 2)
 #define COLOR_GRAY 0xC618
-
-static int rows_per_chunk(int w) {
-    int rows = (BAND_ROWS * LCD_H_RES) / w;
-    return rows > 0 ? rows : 1;
-}
-
-// Samples the shared background at an absolute screen coordinate - used to
-// fill in a sprite's transparent pixels so the character sits "on" the
-// background instead of a solid box.
-static uint16_t background_pixel_at(int x, int y) {
-    int bytes_per_row = BG_WIDTH / 2;
-    uint8_t byte = background_image.pixels[y * bytes_per_row + x / 2];
-    uint8_t nibble = (x % 2 == 0) ? (byte >> 4) : (byte & 0x0F);
-    return background_image.palette[nibble];
-}
-
-static void draw_indexed_rect(esp_lcd_panel_handle_t panel, int x, int y, int w, int h,
-                               const uint16_t *palette, const uint8_t *pixels) {
-    int bytes_per_row = w / 2;
-    int chunk = rows_per_chunk(w);
-    for (int y0 = 0; y0 < h; y0 += chunk) {
-        int rows = h - y0;
-        if (rows > chunk) rows = chunk;
-        for (int row = 0; row < rows; row++) {
-            const uint8_t *row_bytes = &pixels[(y0 + row) * bytes_per_row];
-            uint16_t *row_pixels = &s_band[row * w];
-            for (int col = 0; col < w; col++) {
-                uint8_t byte = row_bytes[col / 2];
-                uint8_t nibble = (col % 2 == 0) ? (byte >> 4) : (byte & 0x0F);
-                row_pixels[col] = palette[nibble];
-            }
-        }
-        draw_rect_band(panel, x, y + y0, w, rows);
-    }
-}
 
 // Same as draw_indexed_rect(), but palette index 0 is "transparent" - drawn
 // as whatever the shared background already shows through at that point,
@@ -334,7 +346,7 @@ void lcd_draw_creature_screen(esp_lcd_panel_handle_t panel, uint8_t creature) {
     const creature_screen_t *screen = creature_screens[creature];
     ESP_LOGI(TAG, "drawing creature screen '%s'", screen->name);
 
-    draw_indexed_rect(panel, 0, 0, BG_WIDTH, BG_HEIGHT, background_image.palette, background_image.pixels);
+    draw_background(panel);
     draw_sprite(panel, SPRITE_X, SPRITE_Y, &screen->sprite);
     fill_rect(panel, TEXT_PANEL_X, TEXT_PANEL_Y, TEXT_PANEL_W, TEXT_PANEL_H, COLOR_BLACK);
 

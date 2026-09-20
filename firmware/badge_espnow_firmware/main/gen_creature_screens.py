@@ -60,32 +60,48 @@ def emit_u8_array(f, name, data):
     f.write("};\n\n")
 
 
-# ---- Background: opaque photo, quantized to 16 colors, no transparency. ----
+# ---- Background: opaque photo, quantized to 8 colors, no transparency. ----
+# The source only ever renders down to ~8 distinct colors after LANCZOS +
+# quantize, so 3bpp (8 slots) is lossless here, not a further compression -
+# it's just not wasting a 4th bit that's never used. 320 columns * 3 bits is
+# exactly 960 bits = 120 bytes, so each row is still byte-aligned even
+# though individual pixels aren't (BG_BITS_PER_PIXEL must keep dividing
+# BG_WIDTH * BG_BITS_PER_PIXEL by 8 evenly for that to hold).
+BG_BITS_PER_PIXEL = 3
+BG_COLORS = 1 << BG_BITS_PER_PIXEL
+
+
+def pack_bits(indices, width, height, bits):
+    assert (width * bits) % 8 == 0, "row must be byte-aligned"
+    bytes_per_row = (width * bits) // 8
+    packed = bytearray(bytes_per_row * height)
+    for row in range(height):
+        buf = 0
+        buf_bits = 0
+        out_pos = row * bytes_per_row
+        for col in range(width):
+            buf = (buf << bits) | indices[row * width + col]
+            buf_bits += bits
+            while buf_bits >= 8:
+                buf_bits -= 8
+                packed[out_pos] = (buf >> buf_bits) & 0xFF
+                out_pos += 1
+    return bytes(packed)
+
+
 def build_background():
     img = Image.open(os.path.join(IMAGES_DIR, "background.webp")).convert("RGB")
-    # Center-crop to the panel's 4:3 aspect before resizing, so the source's
-    # 16:9 crop doesn't get squashed.
-    src_w, src_h = img.size
-    target_ratio = BG_W / BG_H
-    src_ratio = src_w / src_h
-    if src_ratio > target_ratio:
-        new_w = int(src_h * target_ratio)
-        x0 = (src_w - new_w) // 2
-        img = img.crop((x0, 0, x0 + new_w, src_h))
-    else:
-        new_h = int(src_w / target_ratio)
-        y0 = (src_h - new_h) // 2
-        img = img.crop((0, y0, src_w, y0 + new_h))
+    # Source is 16:9, panel is 4:3 - stretch straight to the panel size rather
+    # than cropping, so nothing at the edges gets cut off (at the cost of a
+    # ~33% vertical squash).
     img = img.resize((BG_W, BG_H), Image.LANCZOS)
-    quant = img.quantize(colors=16, method=Image.MEDIANCUT)
-    palette = quant.getpalette()[: 16 * 3]
-    pal565 = [rgb565(palette[i * 3], palette[i * 3 + 1], palette[i * 3 + 2]) for i in range(16)]
+    quant = img.quantize(colors=BG_COLORS, method=Image.MEDIANCUT)
+    palette = quant.getpalette()[: BG_COLORS * 3]
+    pal565 = [rgb565(palette[i * 3], palette[i * 3 + 1], palette[i * 3 + 2]) for i in range(BG_COLORS)]
 
     indices = list(quant.getdata())
-    packed = bytearray((BG_W * BG_H) // 2)
-    for i in range(0, len(indices), 2):
-        packed[i // 2] = (indices[i] << 4) | indices[i + 1]
-    return pal565, bytes(packed)
+    packed = pack_bits(indices, BG_W, BG_H, BG_BITS_PER_PIXEL)
+    return pal565, packed
 
 
 # ---- Sprites: alpha-masked icon, quantized to 15 colors + 1 transparent. ----
@@ -208,6 +224,8 @@ def main():
         )
 
         f.write(f"#define BG_WIDTH {BG_W}\n#define BG_HEIGHT {BG_H}\n")
+        f.write(f"#define BG_BITS_PER_PIXEL {BG_BITS_PER_PIXEL}\n")
+        f.write(f"#define BG_BYTES_PER_ROW ((BG_WIDTH * BG_BITS_PER_PIXEL) / 8)\n")
         f.write(f"#define SPRITE_WIDTH {SPRITE_W}\n#define SPRITE_HEIGHT {SPRITE_H}\n\n")
 
         bg_pal, bg_pixels = build_background()
