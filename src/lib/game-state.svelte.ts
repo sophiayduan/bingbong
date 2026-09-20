@@ -110,6 +110,12 @@ class GameState {
 	// notes actually being live - button presses are ignored while this is
 	// true so an early mash can't score before anything's actually falling.
 	countingDown = $state(false);
+	// Seconds left in the match, counting down from MATCH_DURATION_S once GO
+	// fires. null before the match starts / after a fresh connect, so the
+	// on-screen clock only shows up during actual play.
+	matchSecondsRemaining = $state<number | null>(null);
+	private static readonly MATCH_DURATION_S = 20;
+	private matchTimerId: ReturnType<typeof setInterval> | undefined;
 	private port: SerialPort | null = null;
 	private reader: ReadableStreamDefaultReader<string> | null = null;
 	private readableClosed: Promise<void> | null = null;
@@ -167,6 +173,98 @@ class GameState {
 		osc.connect(gain).connect(this.audioCtx.destination);
 		osc.start(now);
 		osc.stop(now + duration);
+	}
+
+	// Sawtooth through a low lowpass, quick pluck decay - reads as a plucked
+	// electric bass string rather than a synth blip.
+	private playBassTone(freq: number, duration = 0.35) {
+		if (!this.audioCtx) return;
+		const osc = this.audioCtx.createOscillator();
+		const filter = this.audioCtx.createBiquadFilter();
+		const gain = this.audioCtx.createGain();
+		osc.type = 'sawtooth';
+		osc.frequency.value = freq;
+		filter.type = 'lowpass';
+		filter.frequency.value = 900;
+		filter.Q.value = 1;
+
+		const now = this.audioCtx.currentTime;
+		const peak = Math.max(0.35 * this.volume, 0.0001);
+		gain.gain.setValueAtTime(0, now);
+		gain.gain.linearRampToValueAtTime(peak, now + 0.008);
+		gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+		osc.connect(filter).connect(gain).connect(this.audioCtx.destination);
+		osc.start(now);
+		osc.stop(now + duration);
+	}
+
+	// Sawtooth with a slow bowed attack, a bandpass tuned above the
+	// fundamental for stringiness, and a pitch-vibrato LFO - reads as a
+	// bowed violin note rather than a struck one.
+	private playViolinTone(freq: number, duration = 0.6) {
+		if (!this.audioCtx) return;
+		const osc = this.audioCtx.createOscillator();
+		const vibrato = this.audioCtx.createOscillator();
+		const vibratoGain = this.audioCtx.createGain();
+		const filter = this.audioCtx.createBiquadFilter();
+		const gain = this.audioCtx.createGain();
+		osc.type = 'sawtooth';
+		osc.frequency.value = freq;
+		vibrato.type = 'sine';
+		vibrato.frequency.value = 5.5;
+		vibratoGain.gain.value = freq * 0.01;
+		vibrato.connect(vibratoGain).connect(osc.frequency);
+		filter.type = 'bandpass';
+		filter.frequency.value = freq * 2;
+		filter.Q.value = 3;
+
+		const now = this.audioCtx.currentTime;
+		const peak = Math.max(0.28 * this.volume, 0.0001);
+		gain.gain.setValueAtTime(0, now);
+		gain.gain.linearRampToValueAtTime(peak, now + 0.08);
+		gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+		osc.connect(filter).connect(gain).connect(this.audioCtx.destination);
+		osc.start(now);
+		vibrato.start(now);
+		osc.stop(now + duration);
+		vibrato.stop(now + duration);
+	}
+
+	// Square wave (rich in odd harmonics) through a sharp resonant bandpass
+	// and a fast attack - reads as a bright brassy trumpet stab.
+	private playTrumpetTone(freq: number, duration = 0.4) {
+		if (!this.audioCtx) return;
+		const osc = this.audioCtx.createOscillator();
+		const filter = this.audioCtx.createBiquadFilter();
+		const gain = this.audioCtx.createGain();
+		osc.type = 'square';
+		osc.frequency.value = freq;
+		filter.type = 'bandpass';
+		filter.frequency.value = freq * 3;
+		filter.Q.value = 6;
+
+		const now = this.audioCtx.currentTime;
+		const peak = Math.max(0.3 * this.volume, 0.0001);
+		gain.gain.setValueAtTime(0, now);
+		gain.gain.linearRampToValueAtTime(peak, now + 0.015);
+		gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+		osc.connect(filter).connect(gain).connect(this.audioCtx.destination);
+		osc.start(now);
+		osc.stop(now + duration);
+	}
+
+	// Picks the instrument voice by creature - see CREATURES for the
+	// index/name mapping (0 Cat, 1 Baby Chick, 2 Canada Goose, 3 Turkey).
+	// Baby Chick (and anyone not yet assigned a creature) keeps the original
+	// default tone.
+	private playCreatureTone(freq: number, creature: number | undefined) {
+		if (creature === 0) return this.playBassTone(freq); // Cat -> electric bass
+		if (creature === 2) return this.playViolinTone(freq); // Canada Goose -> violin
+		if (creature === 3) return this.playTrumpetTone(freq); // Turkey -> trumpet
+		this.playTone(freq); // Baby Chick -> default
 	}
 
 	// Seconds on the same clock chart note times and press timestamps are
@@ -370,6 +468,30 @@ class GameState {
 		this.countingDown = false;
 	}
 
+	// Starts the 20-second match clock - call once, right at GO (see
+	// Countdown.svelte). Ticks once a second; when it reaches 0 the match
+	// ends the same way as the chart simply running out (see endMatch).
+	startMatchTimer() {
+		this.stopMatchTimer();
+		this.matchSecondsRemaining = GameState.MATCH_DURATION_S;
+		this.matchTimerId = setInterval(() => {
+			if (this.matchSecondsRemaining === null) return;
+			this.matchSecondsRemaining = Math.max(0, this.matchSecondsRemaining - 1);
+			if (this.matchSecondsRemaining === 0) this.endMatch();
+		}, 1000);
+	}
+
+	stopMatchTimer() {
+		clearInterval(this.matchTimerId);
+		this.matchTimerId = undefined;
+	}
+
+	private endMatch() {
+		this.stopMatchTimer();
+		this.stopBeatLoop();
+		rhythmGame.end();
+	}
+
 	// Awards points for a hit's timing accuracy; call with 0 (or don't call at
 	// all) on a miss. Negative/zero points are ignored so score can't go down.
 	awardPoints(player: number, points: number) {
@@ -467,7 +589,7 @@ class GameState {
 		};
 
 		this.events = [entry, ...this.events].slice(0, 50);
-		this.playTone(pitch);
+		this.playCreatureTone(pitch, creature);
 
 		if (this.hasStartedPlay) {
 			rhythmGame.tryHit(entry.player, button, this.now());
@@ -584,6 +706,8 @@ class GameState {
 			this.hasStartedPlay = false;
 			this.gooseMode = false;
 			this.countingDown = false;
+			this.stopMatchTimer();
+			this.matchSecondsRemaining = null;
 			rhythmGame.stop();
 			goto('/');
 
@@ -603,6 +727,8 @@ class GameState {
 		clearTimeout(this.volumeHideTimeout);
 		this.volumeVisible = false;
 		this.stopBeatLoop();
+		this.stopMatchTimer();
+		this.matchSecondsRemaining = null;
 		try {
 			await this.reader?.cancel();
 		} catch {

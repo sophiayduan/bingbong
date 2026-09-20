@@ -67,6 +67,15 @@ class RhythmGame {
 		this.rafId = undefined;
 	}
 
+	// Cuts the song short (the match clock hit 0) - stops the tick loop and
+	// clears every note off the board immediately, rather than leaving
+	// whatever was mid-fall frozen in place.
+	end() {
+		this.stop();
+		this.queues = new Map();
+		this.feedback = new Map();
+	}
+
 	notesFor(player: number, column: Column): LiveNote[] {
 		return this.queues.get(player)?.get(column) ?? [];
 	}
@@ -128,8 +137,24 @@ class RhythmGame {
 	private tick = () => {
 		this.nowMs = (gameState.now() - this.songStart) * 1000;
 		this.sweepMisses();
+		if (this.allNotesCleared()) {
+			gameState.stopBeatLoop();
+			this.stop();
+			return;
+		}
 		this.rafId = requestAnimationFrame(this.tick);
 	};
+
+	// True once every note has been judged and finished lingering (or the
+	// chart had none to begin with) - i.e. nothing left falling on any lane.
+	private allNotesCleared(): boolean {
+		for (const columns of this.queues.values()) {
+			for (const notes of columns.values()) {
+				if (notes.length > 0) return false;
+			}
+		}
+		return true;
+	}
 
 	// Notes that fall past the miss window unhit auto-resolve as misses -
 	// this is the only path that breaks combo besides an explicit whiff.

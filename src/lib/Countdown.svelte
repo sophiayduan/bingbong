@@ -44,6 +44,7 @@
 			display = 'GO!';
 			gameState.playGoSound();
 			gameState.startBeatLoop();
+			gameState.startMatchTimer();
 			// TODO: swap DEMO_CHART for the actual song once one's picked/loaded.
 			rhythmGame.start(DEMO_CHART);
 		});

@@ -13,6 +13,7 @@
 	import { gsap } from 'gsap';
 	import { gameState, supported } from '$lib/game-state.svelte';
 	import Countdown from '$lib/Countdown.svelte';
+	import MatchTimer from '$lib/MatchTimer.svelte';
 	import DevKeyboardInput from '$lib/DevKeyboardInput.svelte';
 
 	let { children } = $props();
@@ -222,6 +223,7 @@
 </div>
 
 <Countdown />
+<MatchTimer />
 {#if import.meta.env.DEV}
 	<DevKeyboardInput />
 {/if}

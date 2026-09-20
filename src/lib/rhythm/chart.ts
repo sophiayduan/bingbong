@@ -15,16 +15,52 @@ export function columnForButton(button: string): Column | undefined {
 }
 
 // Placeholder chart for exercising the falling-notes pipeline before real
-// songs are hand-authored - alternates players/columns/buttons every ~0.45s.
-const ARROW_BUTTONS = ['U', 'D', 'L', 'R'] as const;
-const AB_BUTTONS = ['A', 'B'] as const;
+// songs are hand-authored. Notes sit on a quarter-note grid of the 90 BPM
+// background beat (see GameState.BEAT_BPM) but aren't spaced evenly on it -
+// they come in a groove (see GROOVE below): three notes, a rest, three more,
+// a rest, then a run of six, repeating - so it reads as a beat pattern
+// rather than a metronome. Quarter notes (60/90 = 0.667s apart) rather than
+// something faster so consecutive falling notes have room to clear each
+// other visually instead of overlapping in the lane. All four players share
+// the same groove (every on-beat step fires a note for every character at
+// once); within a single burst a player repeats the same button several
+// times in a row (e.g. "U U U") rather than cycling through different ones,
+// and it's the burst-to-burst (and player-to-player) button that varies.
+const BUTTONS = ['U', 'D', 'L', 'R', 'A', 'B'] as const;
+const NUM_PLAYERS = 4;
+const BEAT_BPM = 90;
+const QUARTER_NOTE_SECONDS = 60 / BEAT_BPM;
 
-export const DEMO_CHART: ChartNote[] = Array.from({ length: 96 }, (_, i) => {
-	const player = (i % 4) + 1;
-	const column: Column = i % 2 === 0 ? 'arrows' : 'ab';
-	const button =
-		column === 'arrows'
-			? ARROW_BUTTONS[Math.floor(i / 2) % ARROW_BUTTONS.length]
-			: AB_BUTTONS[Math.floor(i / 2) % AB_BUTTONS.length];
-	return { time: 2 + i * 0.4, player, button };
-});
+// Each entry is a burst of consecutive on-steps (all the same button, per
+// player) followed by silent (rest) steps, all measured in quarter notes.
+const GROOVE = [
+	{ notes: 3, restSteps: 2 },
+	{ notes: 3, restSteps: 2 },
+	{ notes: 6, restSteps: 3 }
+];
+const CYCLES = 5;
+
+type Burst = { startStep: number; notes: number };
+
+const BURSTS: Burst[] = (() => {
+	const bursts: Burst[] = [];
+	let cursor = 0;
+	for (let cycle = 0; cycle < CYCLES; cycle++) {
+		for (const { notes, restSteps } of GROOVE) {
+			bursts.push({ startStep: cursor, notes });
+			cursor += notes + restSteps;
+		}
+	}
+	return bursts;
+})();
+
+export const DEMO_CHART: ChartNote[] = BURSTS.flatMap((burst, burstIndex) =>
+	Array.from({ length: NUM_PLAYERS }, (_, p) => {
+		const button = BUTTONS[(burstIndex + p) % BUTTONS.length];
+		return Array.from({ length: burst.notes }, (_, n) => ({
+			time: 2 + (burst.startStep + n) * QUARTER_NOTE_SECONDS,
+			player: p + 1,
+			button
+		}));
+	}).flat()
+);
