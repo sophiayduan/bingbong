@@ -28,6 +28,14 @@
 		{ name: 'Pong', normal: ostridge, bing: ostridgeBing }
 	];
 
+	// Goose mode: every slot shows the goose sprite instead of its own, tinted
+	// with a solid-color silhouette (via mask-image on the same sprite, so the
+	// color exactly matches the goose's outline) to tell the 4 players apart
+	// now that they're all the same shape. null = no overlay - the actual
+	// goose slot needs no recoloring since it's already correct as-is. Hex
+	// values match --color-purple/--color-yellow/--color-pink in layout.css.
+	const GOOSE_MODE_TINTS = ['#B791CF', '#E5C85D', null, '#E8BCB7'];
+
 	let { big = false }: { big?: boolean } = $props();
 
 	let nameEls: (HTMLElement | undefined)[] = $state([]);
@@ -101,6 +109,14 @@
 		{@const p = gameState.playerStates.get(i + 1)}
 		{@const slot = SLOTS[i]}
 		{@const isDevSelected = import.meta.env.DEV && devInput.selectedPlayer === i + 1}
+			{@const sprite = gameState.gooseMode
+				? p?.flash
+					? gooseBing
+					: goose
+				: p?.flash
+					? slot.bing
+					: slot.normal}
+			{@const tint = gameState.gooseMode ? GOOSE_MODE_TINTS[i] : null}
 		<div
 			class="relative flex w-50 shrink-0 flex-col items-center group lg:w-90 {gameState.hasStartedPlay
 				? '-space-y-8 min-h-0'
@@ -114,15 +130,19 @@
 				<PlayerLanes player={i + 1} />
 			{/if}
 			<div
-				class="flex items-center justify-center overflow-hidden rounded-full transition-transform duration-150 {big
+				class="relative flex items-center justify-center overflow-hidden rounded-full transition-transform duration-150 {big
 					? 'h-50 w-50 lg:h-90 lg:w-90'
 					: 'h-50 w-50 lg:h-90 lg:w-90'} {p?.flash ? 'scale-110' : 'scale-100'} {p || isDevSelected ? '' : 'grayscale group-hover:grayscale-0  group-hover:scale-110 p-2 group-hover:-translate-y-6'}"
 			>
-				<img
-					src={p?.flash ? slot.bing : slot.normal}
-					alt=""
-					class="h-full w-full object-cover  group-hover:scale-116"
-				/>
+				<div class="relative h-full w-full group-hover:scale-116">
+					<img src={sprite} alt="" class="h-full w-full object-cover" />
+					{#if tint}
+						<div
+							class="pointer-events-none absolute inset-0"
+							style="background-color: {tint}; mix-blend-mode: overlay; mask-image: url({sprite}); mask-size: cover; mask-position: center; mask-repeat: no-repeat; -webkit-mask-image: url({sprite}); -webkit-mask-size: cover; -webkit-mask-position: center; -webkit-mask-repeat: no-repeat;"
+						></div>
+					{/if}
+				</div>
 			</div>
 			<div class="flex flex-col items-center">
 				<p
