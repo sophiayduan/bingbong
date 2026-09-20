@@ -27,14 +27,15 @@ function noteForButton(button: string) {
 
 // Wire representation is the array index (0-3), sent as a single byte over
 // ESP-NOW/serial - see ESPNOW_MAGIC_ASSIGN in badge_espnow_firmware/main/main.c
-// and creature_banners.h, which must list creatures in this same order.
+// and creature_banners.h, which must list creatures in this same order (and
+// SLOTS in PlayerCircles.svelte, whose sprite order must also match this).
 // Each creature shifts every button's scale note by this multiplier (its
 // "call" register) - the button still picks which scale degree plays.
 export const CREATURES = [
-	{ name: 'Canada Goose', pitchMultiplier: 0.5 }, // down an octave: low honk
 	{ name: 'Cat', pitchMultiplier: 1 },
-	{ name: 'Turkey', pitchMultiplier: 0.75 }, // down a fourth: gobble register
-	{ name: 'Baby Chick', pitchMultiplier: 2 } // up an octave: high peep
+	{ name: 'Baby Chick', pitchMultiplier: 2 }, // up an octave: high peep
+	{ name: 'Canada Goose', pitchMultiplier: 0.5 }, // down an octave: low honk
+	{ name: 'Turkey', pitchMultiplier: 0.75 } // down a fourth: gobble register
 ];
 
 export type Status = 'idle' | 'connecting' | 'connected' | 'disconnected' | 'error';

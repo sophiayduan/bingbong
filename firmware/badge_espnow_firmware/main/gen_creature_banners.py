@@ -10,10 +10,10 @@ BYTES_PER_ROW = (W + 7) // 8
 FONT_PATH = "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf"
 OUT_DIR = os.path.dirname(os.path.abspath(__file__))
 CREATURES = [
-    ("CREATURE_GOOSE", "CANADA GOOSE"),
     ("CREATURE_CAT", "CAT"),
-    ("CREATURE_TURKEY", "TURKEY"),
     ("CREATURE_CHICK", "BABY CHICK"),
+    ("CREATURE_GOOSE", "CANADA GOOSE"),
+    ("CREATURE_TURKEY", "TURKEY"),
 ]
 # Not part of the wire creature_banners[] table - fixed system screens the
 # badge shows on its own, before/around the handshake (see main.c).

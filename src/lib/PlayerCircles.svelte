@@ -10,7 +10,15 @@
 	import ostridge from '$lib/images/ostridge.webp';
 	import ostridgeBing from '$lib/images/ostridge-bing.webp';
 
-	// Fixed per slot
+	// Fixed per slot, forever - a slot's name, sprite and creature never
+	// change no matter who connects or disconnects (see handleHello in
+	// game-state.svelte.ts: creature is always player number - 1, i.e. this
+	// same slot index). The sprite order below is NOT cosmetic - it has to
+	// match CREATURES in game-state.svelte.ts (0 Cat, 1 Baby Chick,
+	// 2 Canada Goose, 3 Turkey) exactly, since that's the same id the badge
+	// uses to pick which name it draws on its own screen. There's no turkey
+	// asset, so Turkey borrows the ostrich art. The `name` label is purely
+	// decorative and doesn't need to match the sprite.
 	const SLOTS = [
 		{ name: 'Bing', normal: cat, bing: catBing },
 		{ name: 'Bong', normal: chick, bing: chickBing },
