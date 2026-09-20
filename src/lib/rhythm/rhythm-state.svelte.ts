@@ -101,19 +101,18 @@ class RhythmGame {
 		return this.queues.get(player)?.get(column) ?? [];
 	}
 
-	// A press with nothing in range for that column is ignored outright - no
-	// penalty, no combo break. Badge latency makes "wrong time" presses
-	// common, and harmless mashing between notes shouldn't feel punishing.
+	// A press with nothing in range for that column counts as a whiff - same
+	// as a note falling through unhit - so mashing outside the window can't
+	// dodge a combo break by just not hitting anything.
 	tryHit(player: number, button: string, pressAudioSeconds: number) {
 		const column = columnForButton(button);
 		if (!column) return;
 		const queue = this.queues.get(player)?.get(column);
-		if (!queue || queue.length === 0) return;
 
 		const pressMs = (pressAudioSeconds - this.songStart) * 1000;
 		let bestIndex = -1;
 		let bestDelta = Infinity;
-		queue.forEach((note, index) => {
+		queue?.forEach((note, index) => {
 			// Already-resolved notes (hit or auto-missed) are just lingering
 			// for their fade/fall-off animation - not eligible to be hit again.
 			if (note.button !== button || note.resolved) return;
@@ -123,7 +122,10 @@ class RhythmGame {
 				bestIndex = index;
 			}
 		});
-		if (bestIndex === -1 || Math.abs(bestDelta) > MISS_WINDOW_MS) return;
+		if (bestIndex === -1 || Math.abs(bestDelta) > MISS_WINDOW_MS) {
+			this.registerMiss(player);
+			return;
+		}
 
 		// Replaces the note object rather than mutating it in place - it's a
 		// plain object, not a $state itself, so a mutated property is
@@ -131,8 +133,8 @@ class RhythmGame {
 		// after `queues` is reassigned below. A new object for this id is
 		// what actually makes the resolved state (and its styling) show up.
 		const judgment = classify(bestDelta);
-		const nextQueue = queue.slice();
-		nextQueue[bestIndex] = { ...queue[bestIndex], resolved: judgment, resolvedAtMs: this.nowMs };
+		const nextQueue = queue!.slice();
+		nextQueue[bestIndex] = { ...queue![bestIndex], resolved: judgment, resolvedAtMs: this.nowMs };
 		const nextColumns = new Map(this.queues.get(player));
 		nextColumns.set(column, nextQueue);
 		const nextQueues = new Map(this.queues);
