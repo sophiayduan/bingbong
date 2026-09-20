@@ -10,7 +10,6 @@
 	// to render before the timeline can start.
 	let dimEl: HTMLDivElement | undefined = $state();
 	let numberEl: HTMLDivElement | undefined = $state();
-	let flashEl: HTMLDivElement | undefined = $state();
 	let display = $state('');
 	let timeline: gsap.core.Timeline | undefined;
 
@@ -19,12 +18,11 @@
 	});
 
 	function runSequence() {
-		if (!dimEl || !numberEl || !flashEl) return;
+		if (!dimEl || !numberEl) return;
 		timeline?.kill();
 
 		timeline = gsap.timeline({ onComplete: () => gameState.endCountdown() });
 		timeline.set(numberEl, { opacity: 0, scale: 0.4 });
-		timeline.set(flashEl, { opacity: 0 });
 		timeline.to(dimEl, { opacity: 0.75, duration: 0.25 });
 
 		for (const n of ['3', '2', '1']) {
@@ -53,7 +51,6 @@
 			{ scale: 0.6, opacity: 0 },
 			{ scale: 1.3, opacity: 1, duration: 0.3, ease: 'back.out(4)' }
 		);
-		timeline.fromTo(flashEl, { opacity: 0.9 }, { opacity: 0, duration: 0.4 }, '<');
 		timeline.to(numberEl, { opacity: 0, duration: 0.2 }, '+=0.3');
 		timeline.to(dimEl, { opacity: 0, duration: 0.3 }, '-=0.1');
 	}
@@ -69,5 +66,4 @@
 	>
 		{display}
 	</div>
-	<div bind:this={flashEl} class="absolute inset-0 bg-white opacity-0"></div>
 </div>
