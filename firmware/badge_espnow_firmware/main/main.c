@@ -12,7 +12,6 @@
 // This firmware touches buttons, the accelerometer, Wi-Fi/ESP-NOW, and the
 // screen; it does not init the LEDs or NFC.
 
-#include <stdio.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -120,8 +119,11 @@ static volatile bool s_assigned = false;
 // server round trip needed, unlike s_assigned. Read from onEspNowRecv (the
 // WiFi task) to decide what a fresh ASSIGN should draw.
 static volatile bool s_joined = false;
-static volatile bool s_redraw_pending = false;
-static volatile const uint8_t *s_pending_banner = NULL;
+// What the poll loop should redraw next, set from onEspNowRecv (the WiFi
+// task) and consumed here - REDRAW_CREATURE always uses the current
+// s_creature, so no extra payload needs to cross the task boundary.
+typedef enum { REDRAW_NONE = 0, REDRAW_PRESS_TO_JOIN, REDRAW_CREATURE } redraw_kind_t;
+static volatile redraw_kind_t s_redraw_kind = REDRAW_NONE;
 static volatile uint8_t s_creature = 0;
 static uint32_t s_loop_count = 0;
 // Loop count of the last thing sent (button or HELLO)
@@ -188,7 +190,7 @@ static void send_button(button_id_t id) {
     // s_redraw_pending handoff onEspNowRecv needs.
     if (s_assigned && !s_joined) {
         s_joined = true;
-        lcd_draw_banner(s_panel, creature_banners[s_creature], "creature (first press)");
+        lcd_draw_creature_screen(s_panel, s_creature);
     }
 }
 
@@ -241,13 +243,19 @@ static void onEspNowRecv(const esp_now_recv_info_t *info, const uint8_t *data, i
     }
 
     ESP_LOGI(TAG, "ASSIGN recv: creature=%u (was assigned=%d joined=%d)", msg->creature, s_assigned, s_joined);
+    // The server resends the same ASSIGN on every idle HELLO ping (every ~3s
+    // once assigned - see IDLE_PING_LOOPS), not just on an actual change, so
+    // only redraw when something's actually different - otherwise the
+    // screen would repaint itself every few seconds for no reason.
+    bool changed = !s_assigned || msg->creature != s_creature;
     s_creature = msg->creature;
     s_assigned = true;
-    // A reassign after this badge already joined (a manual swap mid-game)
-    // shows the new creature directly; otherwise it's still waiting on a
-    // first press, so "press any key to join" stands until that happens.
-    s_pending_banner = s_joined ? creature_banners[msg->creature] : system_press_to_join_banner;
-    s_redraw_pending = true;
+    if (changed) {
+        // A reassign after this badge already joined (a manual swap mid-game)
+        // shows the new creature directly; otherwise it's still waiting on a
+        // first press, so "press any key to join" stands until that happens.
+        s_redraw_kind = s_joined ? REDRAW_CREATURE : REDRAW_PRESS_TO_JOIN;
+    }
 }
 
 static void espnow_init(void) {
@@ -330,16 +338,14 @@ void app_main(void) {
         }
         start_last_raw = start_raw;
 
-        if (s_redraw_pending) {
-            s_redraw_pending = false;
-            const uint8_t *banner = (const uint8_t *)s_pending_banner;
-            char label[32];
-            if (banner == system_press_to_join_banner) {
-                snprintf(label, sizeof(label), "press-to-join");
+        if (s_redraw_kind != REDRAW_NONE) {
+            redraw_kind_t kind = s_redraw_kind;
+            s_redraw_kind = REDRAW_NONE;
+            if (kind == REDRAW_PRESS_TO_JOIN) {
+                lcd_draw_banner(s_panel, system_press_to_join_banner, "press-to-join");
             } else {
-                snprintf(label, sizeof(label), "creature %u (reassign)", s_creature);
+                lcd_draw_creature_screen(s_panel, s_creature);
             }
-            lcd_draw_banner(s_panel, banner, label);
         }
 
         s_loop_count++;

@@ -8,8 +8,10 @@
 
 #include "lcd.h"
 #include "creature_banners.h"
+#include "creature_screens.h"
 
 #include <stdbool.h>
+#include <string.h>
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_lcd_panel_io.h"
@@ -59,10 +61,19 @@ static bool IRAM_ATTR on_color_trans_done(esp_lcd_panel_io_handle_t io, esp_lcd_
     return high_task_woken == pdTRUE;
 }
 
-// Draws one band and blocks until the SPI transfer has actually completed,
-// so the caller can safely overwrite s_band right after this returns.
+// Draws one full-width band and blocks until the SPI transfer has actually
+// completed, so the caller can safely overwrite s_band right after this
+// returns.
 static void draw_band(esp_lcd_panel_handle_t panel, int y, int rows) {
     esp_lcd_panel_draw_bitmap(panel, 0, y, LCD_H_RES, y + rows, s_band);
+    xSemaphoreTake(s_flush_done, portMAX_DELAY);
+}
+
+// Same as draw_band(), but for an arbitrary sub-rectangle rather than always
+// the full panel width - used by the creature screen's sprite/text panel,
+// which only cover part of the 320x240 screen.
+static void draw_rect_band(esp_lcd_panel_handle_t panel, int x, int y, int w, int rows) {
+    esp_lcd_panel_draw_bitmap(panel, x, y, x + w, y + rows, s_band);
     xSemaphoreTake(s_flush_done, portMAX_DELAY);
 }
 
@@ -116,6 +127,53 @@ esp_lcd_panel_handle_t lcd_init(void) {
     return panel;
 }
 
+static int rows_per_chunk(int w) {
+    int rows = (BAND_ROWS * LCD_H_RES) / w;
+    return rows > 0 ? rows : 1;
+}
+
+// Background is packed BG_BITS_PER_PIXEL bits/pixel, MSB-first, byte-aligned
+// per row (see gen_creature_screens.py's pack_bits() - BG_WIDTH *
+// BG_BITS_PER_PIXEL is always a whole number of bytes, so a row never leaves
+// a partial byte hanging for the next row to pick up). A pixel can still
+// straddle a byte boundary within its own row; reading a 2-byte window and
+// shifting covers that without needing a per-pixel branch. The bounds check
+// on the second byte only matters for a row's last pixel(s), which for
+// 3bpp/320-wide never actually crosses (960 bits divides into whole 3-byte
+// groups), but the check keeps this correct for other widths/bit depths too.
+static uint8_t read_bg_pixel_index(const uint8_t *row_bytes, int col) {
+    int bit_offset = col * BG_BITS_PER_PIXEL;
+    int byte_index = bit_offset / 8;
+    int bit_in_byte = bit_offset % 8;
+    uint16_t window = (uint16_t)row_bytes[byte_index] << 8;
+    if (byte_index + 1 < BG_BYTES_PER_ROW) window |= row_bytes[byte_index + 1];
+    return (window >> (16 - bit_in_byte - BG_BITS_PER_PIXEL)) & ((1 << BG_BITS_PER_PIXEL) - 1);
+}
+
+// Samples the shared background at an absolute screen coordinate - used to
+// fill in a sprite's transparent pixels so it sits "on" the background
+// instead of a solid box.
+static uint16_t background_pixel_at(int x, int y) {
+    const uint8_t *row_bytes = &background_image.pixels[y * BG_BYTES_PER_ROW];
+    return background_image.palette[read_bg_pixel_index(row_bytes, x)];
+}
+
+static void draw_background(esp_lcd_panel_handle_t panel) {
+    int chunk = rows_per_chunk(BG_WIDTH);
+    for (int y0 = 0; y0 < BG_HEIGHT; y0 += chunk) {
+        int rows = BG_HEIGHT - y0;
+        if (rows > chunk) rows = chunk;
+        for (int row = 0; row < rows; row++) {
+            const uint8_t *row_bytes = &background_image.pixels[(y0 + row) * BG_BYTES_PER_ROW];
+            uint16_t *row_pixels = &s_band[row * BG_WIDTH];
+            for (int col = 0; col < BG_WIDTH; col++) {
+                row_pixels[col] = background_image.palette[read_bg_pixel_index(row_bytes, col)];
+            }
+        }
+        draw_rect_band(panel, 0, y0, BG_WIDTH, rows);
+    }
+}
+
 static void fill_white(esp_lcd_panel_handle_t panel, int y0, int y1) {
     int y = y0;
     while (y < y1) {
@@ -156,4 +214,150 @@ void lcd_draw_banner(esp_lcd_panel_handle_t panel, const uint8_t *banner, const 
     }
 
     fill_white(panel, y_offset + CREATURE_BANNER_HEIGHT, LCD_V_RES);
+}
+
+// ---- Creature screen: background + sprite + name/flavor text ----
+// s_band (BAND_ROWS * LCD_H_RES = 5120 uint16_t) is reused as scratch for
+// every shape below; a rect only ever needs as many rows per chunk as fit
+// its own (narrower) width in that same budget, computed per call so a
+// 140px-wide sprite gets more rows per SPI transfer than a 320px-wide
+// background band would.
+// Must match gen_creature_screens.py's TEXT_AVAILABLE_WIDTH (this minus
+// 2x TEXT_PADDING).
+#define TEXT_PANEL_X 160
+#define TEXT_PANEL_Y 20
+#define TEXT_PANEL_W 150
+#define TEXT_PANEL_H 200
+#define TEXT_PADDING 6
+#define TEXT_LINE_GAP 4
+#define TEXT_BLOCK_GAP 16
+#define SPRITE_X 10
+#define SPRITE_Y ((LCD_V_RES - SPRITE_HEIGHT) / 2)
+#define COLOR_GRAY 0xC618
+
+// Same as draw_indexed_rect(), but palette index 0 is "transparent" - drawn
+// as whatever the shared background already shows through at that point,
+// rather than a real color.
+static void draw_sprite(esp_lcd_panel_handle_t panel, int x, int y, const indexed_image_t *sprite) {
+    int bytes_per_row = SPRITE_WIDTH / 2;
+    int chunk = rows_per_chunk(SPRITE_WIDTH);
+    for (int y0 = 0; y0 < SPRITE_HEIGHT; y0 += chunk) {
+        int rows = SPRITE_HEIGHT - y0;
+        if (rows > chunk) rows = chunk;
+        for (int row = 0; row < rows; row++) {
+            const uint8_t *row_bytes = &sprite->pixels[(y0 + row) * bytes_per_row];
+            uint16_t *row_pixels = &s_band[row * SPRITE_WIDTH];
+            for (int col = 0; col < SPRITE_WIDTH; col++) {
+                uint8_t byte = row_bytes[col / 2];
+                uint8_t nibble = (col % 2 == 0) ? (byte >> 4) : (byte & 0x0F);
+                row_pixels[col] = nibble == 0 ? background_pixel_at(x + col, y + y0 + row)
+                                               : sprite->palette[nibble];
+            }
+        }
+        draw_rect_band(panel, x, y + y0, SPRITE_WIDTH, rows);
+    }
+}
+
+static void fill_rect(esp_lcd_panel_handle_t panel, int x, int y, int w, int h, uint16_t color) {
+    int chunk = rows_per_chunk(w);
+    for (int y0 = 0; y0 < h; y0 += chunk) {
+        int rows = h - y0;
+        if (rows > chunk) rows = chunk;
+        for (int i = 0; i < rows * w; i++) {
+            s_band[i] = color;
+        }
+        draw_rect_band(panel, x, y + y0, w, rows);
+    }
+}
+
+// Draws one glyph cell in a single SPI transfer - a cell (at most 16x22
+// pixels here) is tiny next to s_band's 5120-pixel budget, so no chunking
+// is needed the way the bigger rects above need it.
+static int draw_glyph(esp_lcd_panel_handle_t panel, int x, int y, const font_t *font, char ch,
+                       uint16_t ink, uint16_t bg) {
+    const char *at = strchr(font->charset, ch);
+    if (!at) return 0;
+    int index = (int)(at - font->charset);
+    const uint8_t *bits = &font->bitmap[index * font->bytes_per_row * font->cell_height];
+
+    for (int row = 0; row < font->cell_height; row++) {
+        const uint8_t *row_bits = &bits[row * font->bytes_per_row];
+        uint16_t *row_pixels = &s_band[row * font->cell_width];
+        for (int col = 0; col < font->cell_width; col++) {
+            bool set = (row_bits[col / 8] >> (7 - (col % 8))) & 1;
+            row_pixels[col] = set ? ink : bg;
+        }
+    }
+    draw_rect_band(panel, x, y, font->cell_width, font->cell_height);
+    return font->widths[index];
+}
+
+static int glyph_width(const font_t *font, char ch) {
+    const char *at = strchr(font->charset, ch);
+    return at ? font->widths[at - font->charset] : 0;
+}
+
+static int measure_line_width(const font_t *font, const char *line, size_t len) {
+    if (len == 0) return 0;
+    int w = 0;
+    for (size_t i = 0; i < len; i++) w += glyph_width(font, line[i]) + 1;
+    return w - 1;
+}
+
+static int count_lines(const char *text) {
+    int n = 1;
+    for (const char *p = text; *p; p++) {
+        if (*p == '\n') n++;
+    }
+    return n;
+}
+
+static int text_block_height(const font_t *font, const char *text) {
+    return count_lines(text) * (font->cell_height + TEXT_LINE_GAP) - TEXT_LINE_GAP;
+}
+
+// Draws text horizontally centered within [x, x + w), '\n' moves to the next
+// line. Glyphs are drawn on a solid bg color, not the photo background -
+// simpler than compositing per-glyph, and keeps text legible regardless of
+// what's under the sprite/background at that spot.
+static void draw_text_centered(esp_lcd_panel_handle_t panel, int x, int w, int y, const char *text,
+                                const font_t *font, uint16_t ink, uint16_t bg) {
+    int cursor_y = y;
+    const char *line_start = text;
+    for (const char *p = text;; p++) {
+        if (*p == '\n' || *p == '\0') {
+            size_t len = p - line_start;
+            int cursor_x = x + (w - measure_line_width(font, line_start, len)) / 2;
+            for (size_t i = 0; i < len; i++) {
+                cursor_x += draw_glyph(panel, cursor_x, cursor_y, font, line_start[i], ink, bg) + 1;
+            }
+            cursor_y += font->cell_height + TEXT_LINE_GAP;
+            line_start = p + 1;
+            if (*p == '\0') break;
+        }
+    }
+}
+
+void lcd_draw_creature_screen(esp_lcd_panel_handle_t panel, uint8_t creature) {
+    if (creature >= 4) {
+        ESP_LOGW(TAG, "ignoring out-of-range creature %u for screen draw", creature);
+        return;
+    }
+    const creature_screen_t *screen = creature_screens[creature];
+    ESP_LOGI(TAG, "drawing creature screen '%s'", screen->name);
+
+    draw_background(panel);
+    draw_sprite(panel, SPRITE_X, SPRITE_Y, &screen->sprite);
+    fill_rect(panel, TEXT_PANEL_X, TEXT_PANEL_Y, TEXT_PANEL_W, TEXT_PANEL_H, COLOR_BLACK);
+
+    int name_h = text_block_height(&FONT_LARGE, screen->name);
+    int flavor_h = text_block_height(&FONT_SMALL, screen->flavor);
+    int total_h = name_h + TEXT_BLOCK_GAP + flavor_h;
+    int start_y = TEXT_PANEL_Y + (TEXT_PANEL_H - total_h) / 2;
+    int text_x = TEXT_PANEL_X + TEXT_PADDING;
+    int text_w = TEXT_PANEL_W - 2 * TEXT_PADDING;
+
+    draw_text_centered(panel, text_x, text_w, start_y, screen->name, &FONT_LARGE, COLOR_WHITE, COLOR_BLACK);
+    draw_text_centered(panel, text_x, text_w, start_y + name_h + TEXT_BLOCK_GAP, screen->flavor, &FONT_SMALL,
+                        COLOR_GRAY, COLOR_BLACK);
 }
