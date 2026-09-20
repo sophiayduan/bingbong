@@ -30,10 +30,4 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-<div
-	class="pointer-events-none fixed bottom-6 left-1/2 z-[90] -translate-x-1/2 whitespace-nowrap rounded-lg bg-slate-900/70 px-4 py-2 text-center font-jua text-sm text-white/80"
->
-	Dev keyboard: arrows = U/D/L/R, A/B keys = A/B - controlling
-	<span class="font-semibold text-white">{NAMES[devInput.selectedPlayer - 1]}</span>
-	- press 1-4 to switch
-</div>
+

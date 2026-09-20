@@ -70,7 +70,7 @@
 	}
 </script>
 
-<div class="relative flex h-full items-end justify-center">
+<div class="relative flex h-full items-end justify-center mx-auto">
 	{#each COLUMNS as col (col.key)}
 		<div class="relative h-full w-20 lg:w-28 border-2 border-black" style={col.key === 'ab' ? 'border-left: 0px' : ''}>
 			{#each rhythmGame.notesFor(player, col.key) as n (n.id)}
@@ -132,6 +132,18 @@
 			{rhythmGame.feedback.get(player)?.text}
 		</div>
 	{/if}
+
+	{#key rhythmGame.milestoneFeedback.get(player)?.id}
+		{#if rhythmGame.milestoneFeedback.get(player)}
+			<div class="milestone-pop pointer-events-none absolute inset-x-0 top-1/3 flex justify-center">
+				<span
+					class="font-cloud text-2xl text-yellow text-shadow-gray-800 text-shadow-sm lg:text-4xl"
+				>
+					{rhythmGame.milestoneFeedback.get(player)?.text}
+				</span>
+			</div>
+		{/if}
+	{/key}
 </div>
 
 <style>
@@ -155,5 +167,35 @@
 
 	.hit-flash {
 		animation: hit-flash 300ms ease-out forwards;
+	}
+
+	/* Pops in, holds, then fades - lasts the same 900ms as
+	   MILESTONE_DISPLAY_MS in rhythm-state.svelte.ts so it's gone from the
+	   DOM right as the animation would otherwise sit on its end state. */
+	@keyframes milestone-pop {
+		0% {
+			transform: scale(0.5);
+			opacity: 0;
+		}
+		15% {
+			transform: scale(1.15);
+			opacity: 1;
+		}
+		25% {
+			transform: scale(1);
+			opacity: 1;
+		}
+		80% {
+			transform: scale(1);
+			opacity: 1;
+		}
+		100% {
+			transform: scale(1.05);
+			opacity: 0;
+		}
+	}
+
+	.milestone-pop {
+		animation: milestone-pop 900ms ease-out forwards;
 	}
 </style>

@@ -1,5 +1,6 @@
 import { goto } from '$app/navigation';
 import { rhythmGame } from './rhythm/rhythm-state.svelte';
+import { LEVELS } from './rhythm/levels';
 
 // Espressif's USB vendor ID - the XIAO's native USB-JTAG/serial port
 // enumerates under this, so the picker only shows relevant devices.
@@ -116,6 +117,14 @@ class GameState {
 	matchSecondsRemaining = $state<number | null>(null);
 	private static readonly MATCH_DURATION_S = 20;
 	private matchTimerId: ReturnType<typeof setInterval> | undefined;
+	// 1-indexed - LEVELS[level - 1] in rhythm/levels.ts is the chart currently
+	// (or about to be) playing. Advances via advanceLevel(); back to 1 on a
+	// fresh connect() or playAgain().
+	level = $state(1);
+	// True once a match's clock/chart has finished, until the results
+	// screen's Next/Play Again button dismisses it (see advanceLevel and
+	// playAgain) - the only thing gating whether that screen is shown.
+	matchOver = $state(false);
 	private port: SerialPort | null = null;
 	private reader: ReadableStreamDefaultReader<string> | null = null;
 	private readableClosed: Promise<void> | null = null;
@@ -577,6 +586,38 @@ class GameState {
 	private endMatch() {
 		this.stopMatchTimer();
 		this.stopBeatLoop();
+		this.matchOver = true;
+	}
+
+	get isFinalLevel(): boolean {
+		return this.level >= LEVELS.length;
+	}
+
+	// Called from the results screen's Next button while more levels remain -
+	// dismisses the results screen and runs the same 3-2-1-GO countdown as
+	// the very first level (see Countdown.svelte, which picks the chart for
+	// the new `level`).
+	advanceLevel() {
+		if (this.isFinalLevel) return;
+		this.level++;
+		this.matchOver = false;
+		this.startCountdown();
+	}
+
+	// Called from the results screen's button once there's no next level -
+	// drops back to the pre-game lobby (scores/level reset) without a full
+	// serial reconnect, so badges that are already paired can jump straight
+	// back in. Players who already joined stay joined (playerStates isn't
+	// touched), so the very next press re-fires the auto-start-at-4-players
+	// path in registerButtonPress and kicks off level 1 again.
+	playAgain() {
+		this.level = 1;
+		this.matchOver = false;
+		this.hasStartedPlay = false;
+		this.scores = new Map();
+		this.countingDown = false;
+		this.matchSecondsRemaining = null;
+		goto('/');
 	}
 
 	// Awards points for a hit's timing accuracy; call with 0 (or don't call at
@@ -796,6 +837,8 @@ class GameState {
 			this.hasStartedPlay = false;
 			this.gooseMode = false;
 			this.countingDown = false;
+			this.level = 1;
+			this.matchOver = false;
 			this.stopMatchTimer();
 			this.matchSecondsRemaining = null;
 			rhythmGame.stop();

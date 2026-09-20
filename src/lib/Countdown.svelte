@@ -3,7 +3,7 @@
 	import { gsap } from 'gsap';
 	import { gameState } from '$lib/game-state.svelte';
 	import { rhythmGame } from '$lib/rhythm/rhythm-state.svelte';
-	import { CHARTS_BY_LEVEL, DEFAULT_LEVEL_ID } from '$lib/rhythm/levels';
+	import { CHARTS_BY_LEVEL, LEVELS } from '$lib/rhythm/levels';
 
 	// Always mounted (never behind an {#if}) so these refs are bound before
 	// countingDown ever flips true - no race waiting for a conditional block
@@ -43,8 +43,7 @@
 			gameState.playGoSound();
 			gameState.startBeatLoop();
 			gameState.startMatchTimer();
-			// TODO: swap the default level for a real level-select once one exists.
-			rhythmGame.start(CHARTS_BY_LEVEL[DEFAULT_LEVEL_ID]);
+			rhythmGame.start(CHARTS_BY_LEVEL[LEVELS[gameState.level - 1].id]);
 		});
 		timeline.fromTo(
 			numberEl,
