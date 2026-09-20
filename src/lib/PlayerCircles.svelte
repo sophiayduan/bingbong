@@ -50,13 +50,20 @@
 	}
 </script>
 
+<svelte:head>
+	{#each ANIMALS as animal (animal.name)}
+		<link rel="preload" as="image" href={animal.bing} />
+	{/each}
+</svelte:head>
+
 <div class="select-none mx-auto w-full h-auto flex items-start justify-center -space-x-4">
 	{#each PLAYER_COLORS as _, i (i)}
 		{@const p = gameState.playerStates.get(i + 1)}
 		{@const creature = p ? gameState.creatureByMac.get(p.mac) : undefined}
 		{@const animal = ANIMALS[i % ANIMALS.length]}
 		<div
-			class="flex flex-col items-center -space-y-2 group"
+			class="relative flex w-50 shrink-0 flex-col items-center -space-y-2 group lg:w-90"
+			style="z-index: {PLAYER_COLORS.length - i}"
 			role="group"
 			onmouseenter={() => startWave(i)}
 			onmouseleave={() => stopWave(i)}
