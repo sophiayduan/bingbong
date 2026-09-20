@@ -154,6 +154,27 @@
 			</span>
 		</div>
 
+		<div
+			class="pointer-events-none absolute top-8 right-8 flex items-center gap-2 transition-opacity duration-500 {gameState.volumeVisible
+				? 'opacity-100'
+				: 'opacity-0'}"
+		>
+			<svg
+				class="h-6 w-6 flex-shrink-0"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="white"
+				stroke-width="1.8"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+			>
+				<path d="M4 9v6h4l5 5V4L8 9H4z" fill="white" stroke="none" />
+				<path d="M15 8.5a5 5 0 0 1 0 7" />
+				<path d="M17.5 6a8.5 8.5 0 0 1 0 12" />
+			</svg>
+			<span class="font-jua text-xl text-white">{gameState.volumePercent}%</span>
+		</div>
+
 		{@render children()}
 	{/if}
 </main>

@@ -83,6 +83,16 @@ class GameState {
 	creatureByMac = $state<Map<string, number>>(new Map());
 
 	hasStartedPlay = $state(false);
+	// Controlled by the local D1/D10 switches (see VOL lines below). 1 = the
+	// original fixed 0.3 peak gain; displayed to 0-100 via volumePercent.
+	volume = $state(1);
+	// True while the on-screen volume readout should be visible - shown on
+	// every VOL line and faded back out after a short pause in presses.
+	volumeVisible = $state(false);
+	private static readonly VOLUME_STEP = 0.1;
+	private static readonly MAX_VOLUME = 2;
+	private static readonly VOLUME_HIDE_AFTER_MS = 1200;
+	private volumeHideTimeout: ReturnType<typeof setTimeout> | undefined;
 	private port: SerialPort | null = null;
 	private reader: ReadableStreamDefaultReader<string> | null = null;
 	private readableClosed: Promise<void> | null = null;
@@ -106,8 +116,11 @@ class GameState {
 		osc.frequency.value = freq;
 
 		const now = this.audioCtx.currentTime;
+		// exponentialRampToValueAtTime throws if it ramps from exactly 0, so the
+		// peak floors at 0.0001 (effectively silent at volume 0) rather than 0.
+		const peak = Math.max(0.3 * this.volume, 0.0001);
 		gain.gain.setValueAtTime(0, now);
-		gain.gain.linearRampToValueAtTime(0.3, now + 0.01);
+		gain.gain.linearRampToValueAtTime(peak, now + 0.01);
 		gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.4);
 
 		osc.connect(gain).connect(this.audioCtx.destination);
@@ -186,6 +199,7 @@ class GameState {
 	//   "EVT,<mac>,<button>,<seq>", e.g. "EVT,AA:BB:CC:DD:EE:FF,A,12"
 	//   "ACC,<mac>,<x>,<y>,<z>,<seq>", e.g. "ACC,AA:BB:CC:DD:EE:FF,120,-38,16200,412"
 	//   "HELLO,<mac>,<seq>", e.g. "HELLO,AA:BB:CC:DD:EE:FF,3"
+	//   "VOL,<UP|DOWN>,<seq>", e.g. "VOL,UP,7" - from the D1/D10 switches
 	private handleLine(line: string) {
 		if (line.startsWith('EVT,')) {
 			this.handleButtonLine(line);
@@ -194,7 +208,30 @@ class GameState {
 		} else if (line.startsWith('HELLO,')) {
 			const [mac] = line.slice('HELLO,'.length).split(',');
 			if (mac) this.handleHello(mac);
+		} else if (line.startsWith('VOL,')) {
+			const [direction] = line.slice('VOL,'.length).split(',');
+			this.handleVolumeLine(direction);
 		}
+	}
+
+	get volumePercent() {
+		return Math.round((this.volume / GameState.MAX_VOLUME) * 100);
+	}
+
+	private handleVolumeLine(direction: string) {
+		if (direction === 'UP') {
+			this.volume = Math.min(GameState.MAX_VOLUME, this.volume + GameState.VOLUME_STEP);
+		} else if (direction === 'DOWN') {
+			this.volume = Math.max(0, this.volume - GameState.VOLUME_STEP);
+		} else {
+			return;
+		}
+
+		this.volumeVisible = true;
+		clearTimeout(this.volumeHideTimeout);
+		this.volumeHideTimeout = setTimeout(() => {
+			this.volumeVisible = false;
+		}, GameState.VOLUME_HIDE_AFTER_MS);
 	}
 
 	private handleButtonLine(line: string) {
@@ -337,6 +374,8 @@ class GameState {
 	async disconnect() {
 		clearInterval(this.livenessInterval);
 		this.livenessInterval = undefined;
+		clearTimeout(this.volumeHideTimeout);
+		this.volumeVisible = false;
 		try {
 			await this.reader?.cancel();
 		} catch {

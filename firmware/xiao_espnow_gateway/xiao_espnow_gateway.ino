@@ -10,12 +10,15 @@
 //
 // This stage also reads a set of keyboard switches wired directly to the
 // XIAO's own GPIO pins (each switch: pin <-> GND, using the internal
-// pull-up so a press reads LOW). Each press is reported two ways:
-//   - as an EVT line, exactly like a badge press, so these switches work as
-//     ordinary player input into the bing bong game;
-//   - as a separate KEY line naming the raw D-pin number, read only by the
-//     /controller test page, so wiring can be verified pin-by-pin without
-//     it being tangled up in game/player logic.
+// pull-up so a press reads LOW). Each press is reported:
+//   - as an EVT line, exactly like a badge press, for the 5 switches wired
+//     as ordinary player input into the bing bong game (see LOCAL_KEYS);
+//   - as a VOL,UP / VOL,DOWN line for the D1/D10 switches specifically,
+//     wired as dedicated volume controls instead - they never send EVT;
+//   - as a separate KEY line naming the raw D-pin number, for every local
+//     switch regardless of its action, read only by the /controller test
+//     page, so wiring can be verified pin-by-pin without it being tangled
+//     up in game/player/volume logic.
 // Note: the ESP32-C6's USB port is a fixed-function USB-Serial/JTAG
 // controller (SOC_USB_SERIAL_JTAG_SUPPORTED), not a full USB-OTG peripheral
 // like the S2/S3 have, so it cannot present itself as a USB HID keyboard -
@@ -31,10 +34,12 @@
 //   EVT,<mac>,<button>,<seq>\n
 //   ACC,<mac>,<x>,<y>,<z>,<seq>\n
 //   KEY,<d-pin>,<seq>\n
+//   VOL,<UP|DOWN>,<seq>\n
 //   HELLO,<mac>,<seq>\n
 // e.g. EVT,28:84:85:EA:78:4C,B,97
 //      ACC,28:84:85:EA:78:4C,120,-38,16200,412
 //      KEY,3,5                              (local switch on D3, 5th local press)
+//      VOL,UP,6                             (D1 pressed, 6th local press)
 //      HELLO,28:84:85:EA:78:4C,3
 //
 // Input format, one line per command, from the website over serial:
@@ -86,20 +91,26 @@ typedef struct __attribute__((packed)) {
 // the XIAO_ESP32C6 variant); "pin" is the Arduino constant Dn resolves to,
 // which the core maps to the right underlying GPIO. Edit the letters here
 // to match whatever each physical switch is actually meant to type.
+// D1/D10 are wired as dedicated volume controls instead of game buttons -
+// they report VOL,UP/VOL,DOWN and never send EVT, so they don't also act
+// as a player's letter input.
+enum LocalKeyAction { ACTION_BUTTON, ACTION_VOLUME_UP, ACTION_VOLUME_DOWN };
+
 struct LocalKey {
   uint8_t pin;
   uint8_t dPin;
-  char letter;
+  LocalKeyAction action;
+  char letter;  // only meaningful when action == ACTION_BUTTON
 };
 
 static const LocalKey LOCAL_KEYS[] = {
-  { D1, 1, 'A' },
-  { D3, 3, 'B' },
-  { D6, 6, 'C' },
-  { D7, 7, 'D' },
-  { D8, 8, 'E' },
-  { D9, 9, 'F' },
-  { D10, 10, 'G' },
+  { D1, 1, ACTION_VOLUME_UP, 0 },
+  { D3, 3, ACTION_BUTTON, 'B' },
+  { D6, 6, ACTION_BUTTON, 'C' },
+  { D7, 7, ACTION_BUTTON, 'D' },
+  { D8, 8, ACTION_BUTTON, 'E' },
+  { D9, 9, ACTION_BUTTON, 'F' },
+  { D10, 10, ACTION_VOLUME_DOWN, 0 },
 };
 static const int LOCAL_KEY_COUNT = sizeof(LOCAL_KEYS) / sizeof(LOCAL_KEYS[0]);
 
@@ -107,6 +118,16 @@ static bool localStable[LOCAL_KEY_COUNT];
 static bool localLastRaw[LOCAL_KEY_COUNT];
 static uint16_t localSeq = 0;
 static String localSourceId;
+
+// Auto-repeat while a volume switch is held: after an initial pause (so a
+// quick tap stays a single step), it fires the same VOL line again every
+// REPEAT_INTERVAL_MS, sliding the volume continuously for as long as it's
+// held down. Only applies to ACTION_VOLUME_UP/DOWN - game buttons stay
+// one-shot per press.
+static const unsigned long REPEAT_DELAY_MS = 350;
+static const unsigned long REPEAT_INTERVAL_MS = 60;
+static unsigned long localPressStart[LOCAL_KEY_COUNT];
+static unsigned long localLastRepeat[LOCAL_KEY_COUNT];
 
 static void onEspNowRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
   if (len < 1) return;
@@ -232,7 +253,17 @@ void setup() {
   Serial.printf("[keys] %d local switches ready\n", LOCAL_KEY_COUNT);
 }
 
+// Sends the VOL/KEY line pair for one volume key event (initial press or an
+// auto-repeat tick while held).
+static void sendVolumeEvent(const LocalKey &key) {
+  localSeq++;
+  Serial.printf("VOL,%s,%u\n", key.action == ACTION_VOLUME_UP ? "UP" : "DOWN", localSeq);
+  Serial.printf("KEY,%u,%u\n", key.dPin, localSeq);
+}
+
 void loop() {
+  unsigned long now = millis();
+
   // 2-sample debounce, same pattern as the badge firmware: only commit a
   // transition once the raw reading has been stable for one full poll.
   for (int i = 0; i < LOCAL_KEY_COUNT; i++) {
@@ -240,12 +271,27 @@ void loop() {
     if (raw == localLastRaw[i] && raw != localStable[i]) {
       localStable[i] = raw;
       if (raw) {  // released -> pressed edge
-        localSeq++;
-        Serial.printf("EVT,%s,%c,%u\n", localSourceId.c_str(), LOCAL_KEYS[i].letter, localSeq);
-        Serial.printf("KEY,%u,%u\n", LOCAL_KEYS[i].dPin, localSeq);
+        localPressStart[i] = now;
+        localLastRepeat[i] = now;
+        if (LOCAL_KEYS[i].action == ACTION_BUTTON) {
+          localSeq++;
+          Serial.printf("EVT,%s,%c,%u\n", localSourceId.c_str(), LOCAL_KEYS[i].letter, localSeq);
+          Serial.printf("KEY,%u,%u\n", LOCAL_KEYS[i].dPin, localSeq);
+        } else {
+          sendVolumeEvent(LOCAL_KEYS[i]);
+        }
       }
     }
     localLastRaw[i] = raw;
+
+    // Auto-repeat: only volume keys, and only once they've been held past
+    // the initial delay, so a quick tap still produces exactly one step.
+    bool isVolumeKey = (LOCAL_KEYS[i].action == ACTION_VOLUME_UP || LOCAL_KEYS[i].action == ACTION_VOLUME_DOWN);
+    if (isVolumeKey && localStable[i] && (now - localPressStart[i]) > REPEAT_DELAY_MS &&
+        (now - localLastRepeat[i]) > REPEAT_INTERVAL_MS) {
+      localLastRepeat[i] = now;
+      sendVolumeEvent(LOCAL_KEYS[i]);
+    }
   }
 
   if (Serial.available()) {
