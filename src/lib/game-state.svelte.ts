@@ -557,10 +557,15 @@ class GameState {
 		this.matchTimerId = undefined;
 	}
 
+	// Stops the match clock and the background beat, but deliberately leaves
+	// rhythmGame's own tick loop running - the chart is sized (see
+	// LAST_NOTE_CUTOFF_S in chart.ts) so nothing should still be falling by
+	// now, but if anything is, it's left to resolve and fade out on its own
+	// the normal way (see NOTE_LINGER_MS) rather than being yanked off
+	// screen mid-fall.
 	private endMatch() {
 		this.stopMatchTimer();
 		this.stopBeatLoop();
-		rhythmGame.end();
 	}
 
 	// Awards points for a hit's timing accuracy; call with 0 (or don't call at

@@ -97,15 +97,6 @@ class RhythmGame {
 		this.rafId = undefined;
 	}
 
-	// Cuts the song short (the match clock hit 0) - stops the tick loop and
-	// clears every note off the board immediately, rather than leaving
-	// whatever was mid-fall frozen in place.
-	end() {
-		this.stop();
-		this.queues = new Map();
-		this.feedback = new Map();
-	}
-
 	notesFor(player: number, column: Column): LiveNote[] {
 		return this.queues.get(player)?.get(column) ?? [];
 	}
